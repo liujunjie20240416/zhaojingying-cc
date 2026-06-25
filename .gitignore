@@ -1,0 +1,43 @@
+# ── 敏感文件 ──
+.env
+
+# ── 数据库 ──
+*.sqlite3
+*.sqlite
+
+# ── macOS ──
+.DS_Store
+
+# ── IDE ──
+.idea/
+
+# ── Python ──
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# ── 虚拟环境 ──
+.venv
+venv/
+env/
+
+# ── 向量数据库 ──
+ai/documents/lancedb_storage/
+
+# ── 用户上传文件 ──
+media/
+
+# ── 前端构建产物 ──
+static/frontend/
+frontend/dist/
+frontend/node_modules/
+
+# ── Git Worktrees ──
+.worktrees/
+
+# ── VSCode（保留 extensions.json 用于团队一致） ──
+.vscode/*
+!.vscode/extensions.json
