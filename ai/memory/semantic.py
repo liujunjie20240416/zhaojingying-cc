@@ -101,13 +101,13 @@ def search_semantic(friend_id: int, query: str, top_k: int = 10) -> list[dict]:
                     results[sm.id] = {
                         "id": sm.id, "fact": sm.fact, "category": sm.category,
                         "confidence": sm.confidence, "source": "keyword",
-                        "score": 1.0,
+                        "is_locked": sm.is_locked, "score": 1.0,
                     }
 
     # 2. 语义搜索（补充）
     try:
         db = lancedb.connect(_STORAGE_DIR)
-        if table_name in db.table_names():
+        if table_name in db.list_tables():
             vdb = LanceDB(connection=db, embedding=CustomEmbeddings(), table_name=table_name)
             docs = vdb.similarity_search_with_score(query, k=top_k)
             for doc, score in docs:
@@ -118,7 +118,7 @@ def search_semantic(friend_id: int, query: str, top_k: int = 10) -> list[dict]:
                     results[sm.id] = {
                         "id": sm.id, "fact": sm.fact, "category": sm.category,
                         "confidence": sm.confidence, "source": "semantic",
-                        "score": float(score),
+                        "is_locked": sm.is_locked, "score": float(score),
                     }
     except Exception:
         pass

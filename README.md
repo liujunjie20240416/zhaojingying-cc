@@ -1,35 +1,31 @@
 
-# 赵晶莹·CC (Zhaojingying CC) — Multi-Agent RAG Memory Chat Platform
+# 赵晶莹 (Zhaojingying) — AI Character Chat Platform
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.136+-009688.svg)](https://fastapi.tiangolo.com/)
 [![Vue](https://img.shields.io/badge/Vue-3.x-4FC08D.svg)](https://vuejs.org/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-1.2+-orange.svg)](https://langchain-ai.github.io/langgraph/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-基于多智能体架构的 AI 角色聊天平台。通过导入真实微信聊天记录，利用混合搜索、语义记忆、情景记忆和反思机制，让 AI 深度模拟特定人物的语言风格与记忆。
+一个基于 AI 的角色聊天平台，通过导入真实微信聊天记录，让 AI 模拟特定人物的语言风格、记忆和对话习惯。
 
-A multi-agent AI character chat platform that deeply simulates a real person's conversational style by importing authentic WeChat chat history, powered by hybrid search, semantic memory, episodic memory, and reflection.
+An AI-powered character chat platform that simulates a real person's conversational style by importing authentic WeChat chat history, powered by hybrid search and LLM agents.
 
 ## ✨ 功能特性 | Features
 
-- **多智能体架构** — Supervisor 协调 Memory / Conversation / Emotion 三个子代理，各司其职
-- **混合记忆系统** — 语义记忆 (Semantic) + 情景记忆 (Episodic) + 定期反思 (Reflection)，构建持久角色记忆
-- **混合搜索** — SQLite FTS5 全文搜索 + LanceDB 语义向量搜索，关键词 + 语义双重覆盖
-- **RAG 增强检索** — Query Rewriting → HyDE → Retrieval → Rerank → Compression 五阶段管线
-- **微信聊天导入** — 解析微信导出记录，过滤噪音，构建角色记忆库
-- **记忆管理面板** — 前端可视化查看/编辑/删除角色的记忆条目
+- **微信聊天导入** — 解析微信导出的聊天记录，过滤噪音，构建角色记忆库
+- **混合搜索** — SQLite FTS5 全文搜索 + LanceDB 语义向量搜索，精准回忆过往对话
+- **LangGraph Agent** — 对话代理自动决策：何时搜索记忆、何时直接回答
 - **语音交互** — 支持语音识别 (ASR) 和语音合成 (TTS)
 - **角色管理** — 创建、编辑、自定义 AI 角色的外观和声音
 - **JWT 认证** — 用户注册/登录，安全访问控制
-- **Django Admin** — 内置管理后台
+- **Django Admin** — 内置管理后台，方便数据管理
 
 ## 🏗️ 技术栈 | Tech Stack
 
 | 层级 | 技术 |
 |------|------|
 | **后端框架** | FastAPI + Django ORM |
-| **前端** | Vue 3 + Vite + Pinia |
+| **前端** | Vue 3 + Vite + DaisyUI |
 | **AI/LLM** | DeepSeek V4 Pro + LangChain + LangGraph |
 | **向量嵌入** | text-embedding-v4 |
 | **向量数据库** | LanceDB |
@@ -41,53 +37,31 @@ A multi-agent AI character chat platform that deeply simulates a real person's c
 ## 📁 项目结构 | Project Structure
 
 ```
-zhaojingying-cc/
-├── main.py                     # FastAPI 入口
-├── django_settings.py          # Django ORM 配置
-├── pyproject.toml              # Python 依赖
-├── ai/                         # AI 核心
-│   ├── chat_graph.py           # LangGraph 对话图
-│   ├── custom_embeddings.py    # 自定义向量嵌入
-│   ├── agents/                 # 多智能体
-│   │   ├── supervisor.py       # 主控代理 — 意图路由
-│   │   ├── supervisor_graph.py # Supervisor 状态图
-│   │   ├── memory_agent.py     # 记忆代理 — 检索/存储
-│   │   ├── conversation_agent.py # 对话代理 — 生成回复
-│   │   └── emotion_agent.py    # 情感代理 — 情绪感知
-│   ├── memory/                 # 记忆子系统
-│   │   ├── semantic.py         # 语义记忆（结构化知识）
-│   │   ├── episodic.py         # 情景记忆（对话片段）
-│   │   └── reflection.py       # 反思机制（定期提炼）
-│   └── rag/                    # RAG 增强检索管线
-│       ├── query_rewriter.py   # 查询改写
-│       ├── hyde.py             # HyDE 假设文档生成
-│       ├── retriever.py        # 混合检索器
-│       ├── reranker.py         # 重排序
-│       └── compressor.py       # 上下文压缩
-├── api/                        # FastAPI 路由
-│   ├── auth.py                 # 认证
-│   ├── chat.py                 # 对话（含 SSE 流式）
-│   ├── character.py            # 角色管理
-│   ├── memory.py               # 记忆管理 API
-│   ├── import_data.py          # 微信导入
-│   ├── voice.py                # 语音服务
+zhaojingying-2024.4.16/
+├── main.py                  # FastAPI 入口
+├── django_settings.py       # Django ORM 配置
+├── pyproject.toml           # Python 依赖
+├── ai/                      # AI 核心
+│   ├── chat_graph.py        # LangGraph 对话代理
+│   ├── memory_graph.py      # 记忆注入
+│   ├── custom_embeddings.py # 自定义向量嵌入
+│   └── documents/           # LanceDB 存储（本地）
+├── api/                     # FastAPI 路由
+│   ├── auth.py              # 认证
+│   ├── chat.py              # 对话（含 WebSocket）
+│   ├── character.py         # 角色管理
+│   ├── import_data.py       # 微信导入
 │   └── ...
-├── web/                        # Django 模型 + 迁移
-│   ├── models/                 # User, Character, Message, Memory...
+├── web/                     # Django 模型 + 迁移
+│   ├── models/              # User, Character, Message...
 │   └── migrations/
-├── frontend/                   # Vue 3 前端
+├── frontend/                # Vue 3 前端
 │   └── src/
-│       ├── components/character/chat_field/
-│       │   ├── ChatField.vue       # 聊天界面
-│       │   └── MemoryManager.vue   # 记忆管理面板
-│       ├── views/              # 页面
-│       └── stores/             # Pinia 状态管理
-├── tests/                      # 测试
-│   ├── test_agents.py
-│   ├── test_memory.py
-│   └── test_rag.py
+│       ├── components/      # 聊天界面、导航栏等
+│       ├── views/           # 页面
+│       └── stores/          # Pinia 状态管理
 └── tools/
-    └── wechat_parser.py        # 微信聊天记录解析器
+    └── wechat_parser.py     # 微信聊天记录解析器
 ```
 
 ## 🚀 快速开始 | Quick Start
@@ -101,8 +75,8 @@ zhaojingying-cc/
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/liujunjie20240416/zhaojingying-cc.git
-cd zhaojingying-cc
+git clone https://github.com/liujunjie20240416/zhaojingying-2024.4.16.git
+cd zhaojingying-2024.4.16
 ```
 
 ### 2. 后端配置
@@ -113,19 +87,13 @@ uv sync
 
 # 配置环境变量
 cp .env.example .env
-# 编辑 .env，填入你的 DashScope API Key
+# 编辑 .env，填入你的 API Key
 
 # 运行数据库迁移
-uv run python -c "
-import django, os
-os.environ['DJANGO_SETTINGS_MODULE'] = 'django_settings'
-django.setup()
-from django.core.management import call_command
-call_command('migrate')
-"
+python manage.py migrate  # 或使用 Django manage.py
 
 # 启动服务
-uv run uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8000
 ```
 
 ### 3. 前端配置
@@ -133,15 +101,15 @@ uv run uvicorn main:app --reload --port 8000
 ```bash
 cd frontend
 npm install
-npm run dev        # 开发模式 → http://localhost:5173
-npm run build      # 生产构建
+npm run dev        # 开发模式，默认 http://localhost:5173
+npm run build      # 生产构建 → static/frontend/
 ```
 
 ### 4. 导入微信聊天记录
 
 1. 将微信导出的 `.txt` 聊天记录放入项目
 2. 在前端角色管理页面，点击「导入微信记录」
-3. 系统自动解析、过滤噪音、构建向量索引和 FTS5 全文索引
+3. 系统会自动解析、过滤噪音、构建向量索引
 
 ## 🔧 环境变量 | Environment Variables
 
@@ -149,37 +117,11 @@ npm run build      # 生产构建
 
 | 变量 | 说明 |
 |------|------|
-| `DJANGO_SECRET_KEY` | Django 密钥（session / JWT 签名） |
+| `DJANGO_SECRET_KEY` | Django 密钥（用于 session / JWT 签名） |
 | `API_KEY` | DashScope API 密钥 |
 | `API_BASE` | API 端点地址 |
 | `WSS_URL` | WebSocket 地址（语音） |
 | `VOICE_URL` | TTS 服务地址 |
-
-## 🧠 记忆系统架构 | Memory Architecture
-
-```
-用户消息
-    │
-    ▼
-┌──────────────┐
-│  Supervisor   │ ◄── 意图路由
-└──────┬───────┘
-       │
-  ┌────┴────┬──────────┐
-  ▼         ▼          ▼
-Memory   Conversation  Emotion
-Agent    Agent         Agent
-  │
-  ├── SQLite FTS5 (关键词全文搜索)
-  ├── LanceDB (语义向量搜索)
-  └── 结果融合 → LLM 生成回复
-       │
-       ▼
-  对话存档 → Episodic Memory
-       │
-       ▼
-  定期触发 → Reflection (提炼 → Semantic Memory)
-```
 
 ## 🤝 贡献 | Contributing
 

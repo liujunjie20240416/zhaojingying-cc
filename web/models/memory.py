@@ -32,6 +32,7 @@ class SemanticMemory(models.Model):
     SOURCE_CHOICES = [
         ("ai", "AI 自动整理"),
         ("user", "用户手动维护"),
+        ("import", "导入聊天记录预处理"),
     ]
 
     friend = models.ForeignKey(Friend, on_delete=models.CASCADE)

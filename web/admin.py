@@ -5,6 +5,7 @@ from web.models.friend import Friend, Message,SystemPrompt
 from web.models.user import UserProfile
 from web.models.character import Character,Voice
 from web.models.memory import EpisodicMemory, SemanticMemory
+from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
@@ -35,6 +36,25 @@ class SemanticMemoryAdmin(admin.ModelAdmin):
     list_filter = ("category", "source", "is_locked", "is_active")
     search_fields = ("fact", "friend__me__user__username", "friend__character__name")
     raw_id_fields = ("friend", "replaced_by")
+
+
+@admin.register(ImportAnalysis)
+class ImportAnalysisAdmin(admin.ModelAdmin):
+    list_display = ("character", "status", "total_messages", "created_at")
+    list_filter = ("status",)
+    raw_id_fields = ("character",)
+
+
+@admin.register(TimeChunk)
+class TimeChunkAdmin(admin.ModelAdmin):
+    list_display = ("label", "character", "start_msg_index", "end_msg_index")
+    search_fields = ("label", "character__name")
+
+
+@admin.register(TopicTag)
+class TopicTagAdmin(admin.ModelAdmin):
+    list_display = ("tag", "character")
+    search_fields = ("tag", "character__name")
 
 
 @admin.register(EpisodicMemory)

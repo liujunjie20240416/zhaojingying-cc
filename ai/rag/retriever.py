@@ -90,7 +90,7 @@ class HybridRetriever:
         table_name = f"wechat_{character_id}"
         try:
             db = lancedb.connect(_STORAGE_DIR)
-            if table_name not in db.table_names():
+            if table_name not in db.list_tables():
                 return []
             vdb = LanceDB(connection=db, embedding=self.embeddings, table_name=table_name)
             docs = vdb.similarity_search_with_score(query, k=k)

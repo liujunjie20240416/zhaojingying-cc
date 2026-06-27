@@ -67,6 +67,7 @@ from api.asr import router as asr_router
 from api.homepage import router as homepage_router
 from api.import_data import router as import_router
 from api.memory import router as memory_router
+from api.voice import router as voice_router
 
 app.include_router(auth_router)
 app.include_router(user_router)
@@ -78,6 +79,7 @@ app.include_router(asr_router)
 app.include_router(homepage_router)
 app.include_router(import_router)
 app.include_router(memory_router)
+app.include_router(voice_router)
 
 # ── SPA fallback ──
 index_path = PROJECT_ROOT / "static" / "frontend" / "index.html"

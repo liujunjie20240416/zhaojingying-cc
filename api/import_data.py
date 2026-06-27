@@ -6,17 +6,19 @@ POST /api/import/wechat/  — 上传微信聊天记录文件，解析后存入 L
 
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 import lancedb
 from django.db import connection
-from fastapi import APIRouter, Depends, Form, UploadFile
+from fastapi import APIRouter, Depends, Form, Query, UploadFile
 from langchain_community.vectorstores import LanceDB
 
 from ai.custom_embeddings import CustomEmbeddings
 from api.deps import get_current_user
 from web.models.character import Character
 from web.models.chat_message import ChatMessage
+from web.models.import_analysis import ImportAnalysis
 from tools.wechat_parser import parse_wechat_txt, format_output_as_chunks
 
 router = APIRouter()
@@ -127,6 +129,13 @@ def import_wechat(
                 WHERE character_id = {character_id}
             """)
 
+        # ── 触发异步预处理 ──
+        threading.Thread(
+            target=_run_preprocessing_async,
+            args=(character_id,),
+            daemon=True,
+        ).start()
+
         return {
             "result": "success",
             "total_messages": len(messages),
@@ -135,6 +144,7 @@ def import_wechat(
             "fts_table": fts_table,
             "character_id": character_id,
             "table_name": table_name,
+            "analyzing": True,  # 前端可据此轮询状态
         }
 
     finally:
@@ -142,3 +152,34 @@ def import_wechat(
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+def _run_preprocessing_async(character_id: int):
+    """后台线程中跑预处理，不阻塞导入响应"""
+    try:
+        from ai.preprocessing.pipeline import run_preprocessing
+
+        run_preprocessing(character_id)
+    except Exception:
+        pass
+
+
+@router.get("/api/import/status/")
+def import_status(character_id: int = Query(...), user=Depends(get_current_user)):
+    """查询预处理进度。analyzing 时 total_messages 为进度百分比(0-100)，done 后为实际条数。"""
+    try:
+        analysis = ImportAnalysis.objects.filter(character_id=character_id).first()
+        if not analysis:
+            return {"result": "success", "status": "not_started"}
+        resp = {
+            "result": "success",
+            "status": analysis.status,
+            "error_message": analysis.error_message,
+        }
+        if analysis.status == "analyzing":
+            resp["progress_pct"] = analysis.total_messages  # 临时存的是百分比
+        else:
+            resp["total_messages"] = analysis.total_messages
+        return resp
+    except Exception:
+        return {"result": "系统异常，请稍后重试"}
