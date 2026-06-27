@@ -6,77 +6,213 @@
 [![Vue](https://img.shields.io/badge/Vue-3.x-4FC08D.svg)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-一个基于 AI 的角色聊天平台，通过导入真实微信聊天记录，让 AI 模拟特定人物的语言风格、记忆和对话习惯。
+一个基于 AI 的角色聊天平台。导入真实微信聊天记录后，AI 能模拟特定人物的语言风格、记忆和对话习惯，让你和她继续聊天。
 
-An AI-powered character chat platform that simulates a real person's conversational style by importing authentic WeChat chat history, powered by hybrid search and LLM agents.
+An AI-powered character chat platform that simulates a real person's conversational style by importing authentic WeChat chat history.
 
-## ✨ 功能特性 | Features
+---
 
-- **微信聊天导入** — 解析微信导出的聊天记录，过滤噪音，构建角色记忆库
-- **混合搜索** — SQLite FTS5 全文搜索 + LanceDB 语义向量搜索，精准回忆过往对话
-- **LangGraph Agent** — 对话代理自动决策：何时搜索记忆、何时直接回答
-- **语音交互** — 支持语音识别 (ASR) 和语音合成 (TTS)
-- **角色管理** — 创建、编辑、自定义 AI 角色的外观和声音
-- **JWT 认证** — 用户注册/登录，安全访问控制
-- **Django Admin** — 内置管理后台，方便数据管理
+## ✨ 核心能力
 
-## 🏗️ 技术栈 | Tech Stack
+### 🧠 Multi-Agent 协作架构
+
+四个 Agent 协作完成每一次对话，由 Supervisor 统一调度：
+
+```
+用户消息 → Supervisor（意图路由）
+              ├── Memory Agent（记忆检索）
+              ├── Emotion Agent（情绪感知）
+              └── Conversation Agent（对话生成）
+```
+
+| Agent | 职责 |
+|-------|------|
+| **Supervisor** | 分析用户意图，决定调用哪些 Agent |
+| **Memory Agent** | 三轮检索，找到最相关的历史对话和已知信息 |
+| **Emotion Agent** | 识别当前对话中的情绪变化 |
+| **Conversation Agent** | 综合上下文生成角色回复 |
+
+### 🔍 增强 RAG 检索管道
+
+Memory Agent 内部经过完整的检索管道，确保从海量聊天记录中找到最相关的上下文：
+
+```
+原始查询 → QueryRewriter（多角度改写）
+           ↓
+         HyDE（假设文档生成，弥合语义 gap）
+           ↓
+         HybridRetriever（FTS5 全文 + LanceDB 向量并行检索 + 去重）
+           ↓
+         Reranker（Cross-Encoder 精排）
+           ↓
+         ContextCompressor（长上下文压缩）
+```
+
+### 🧩 分层记忆系统
+
+| 记忆层 | 存储 | 用途 |
+|--------|------|------|
+| **Episodic Memory** | LanceDB 向量库 | 写缓冲，存储原始对话摘要 |
+| **Semantic Memory** | SQLite + LanceDB | 长期事实库，结构化存储（身份、偏好、经历、关系） |
+| **Reflection** | 定期触发 | 从 Episodic 提炼高价值信息写入 Semantic |
+
+- 用户事实（`is_locked=False`）：偏好、经历、身份信息，可被 Reflection 更新
+- 角色设定（`is_locked=True`）：从聊天记录中学到的角色性格，锁定不变
+- **Memory Manager UI**：前端可视化界面，用户可手动增删改查记忆
+
+### 🔄 Memory Agent 三轮检索
+
+匹配过程不是简单搜关键词，而是有时间感知的多轮检索：
+
+1. **时间匹配** — 用户说"以前"、"最近"、"那时候"，先定位到对应时间段（TimeChunk）
+2. **范围内混合检索** — 在时间段锁定的消息范围内，做 FTS5 + LanceDB 混合搜索
+3. **话题路由** — 匹配话题标签（TopicTag），补充与该话题相关的历史消息
+
+### 📊 导入预处理 Pipeline（Map-Only）
+
+微信聊天记录导入后，自动触发后台分析：
+
+```
+导入完成 → Chunking（按聊天日自动切分，推算用户作息边界）
+           ↓
+         Map（N 个 LLM 并行分析每个时间段）
+           ↓
+         Write（直接写入，无 Reduce 瓶颈）
+```
+
+预处理产出：
+- **TimeChunk**：按日标注时间段（如"2024-03-15 · 第一次约会"）
+- **TopicTag**：自动聚合话题标签（如"美食/火锅"、"工作/跳槽"）
+- **用户事实** → SemanticMemory（`is_locked=False`）
+- **角色事实** → SemanticMemory（`is_locked=True`）+ 自动追加到 Character.profile
+
+### 🎤 语音交互
+
+- **ASR**：阿里云 DashScope gummy-realtime-v1 语音识别
+- **TTS**：cosyvoice-v3-flash 语音合成 + 自定义音色训练（Voice Enrollment）
+- **WebSocket**：实时流式语音对话
+
+### 🛠 其他功能
+
+- **角色管理**：创建、编辑 AI 角色的外观、声音、性格
+- **记忆管理器**：可视化增删改查 Semantic Memory，支持关键词搜索
+- **JWT 认证**：用户注册/登录
+- **Django Admin**：内置管理后台
+- **微信聊天导入**：解析导出的 `.txt`，自动过滤系统消息等噪音
+
+---
+
+## 🏗️ 技术栈
 
 | 层级 | 技术 |
 |------|------|
 | **后端框架** | FastAPI + Django ORM |
-| **前端** | Vue 3 + Vite + DaisyUI |
+| **前端** | Vue 3 + Vite |
 | **AI/LLM** | DeepSeek V4 Pro + LangChain + LangGraph |
+| **Multi-Agent** | Supervisor Graph（LangGraph StateGraph） |
 | **向量嵌入** | text-embedding-v4 |
 | **向量数据库** | LanceDB |
 | **全文搜索** | SQLite FTS5 |
-| **语音** | 阿里云 DashScope (gummy-realtime-v1 ASR + cosyvoice-v3-flash TTS) |
+| **分词** | jieba |
+| **语音** | 阿里云 DashScope（ASR + TTS + Voice Enrollment） |
 | **认证** | django-rest-framework-simplejwt |
 | **包管理** | uv (Python) + npm (前端) |
 
-## 📁 项目结构 | Project Structure
+---
+
+## 📁 项目结构
 
 ```
-zhaojingying-2024.4.16/
-├── main.py                  # FastAPI 入口
-├── django_settings.py       # Django ORM 配置
-├── pyproject.toml           # Python 依赖
-├── ai/                      # AI 核心
-│   ├── chat_graph.py        # LangGraph 对话代理
-│   ├── memory_graph.py      # 记忆注入
-│   ├── custom_embeddings.py # 自定义向量嵌入
-│   └── documents/           # LanceDB 存储（本地）
-├── api/                     # FastAPI 路由
-│   ├── auth.py              # 认证
-│   ├── chat.py              # 对话（含 WebSocket）
-│   ├── character.py         # 角色管理
-│   ├── import_data.py       # 微信导入
-│   └── ...
-├── web/                     # Django 模型 + 迁移
-│   ├── models/              # User, Character, Message...
-│   └── migrations/
-├── frontend/                # Vue 3 前端
+zhaojingying-cc/
+├── main.py                          # FastAPI 入口
+├── django_settings.py               # Django ORM 配置
+├── manage.py                        # Django 管理命令
+├── pyproject.toml                   # Python 依赖
+│
+├── ai/                              # AI 核心
+│   ├── agents/                      # Multi-Agent 系统
+│   │   ├── supervisor_graph.py      #   主编排图（StateGraph）
+│   │   ├── supervisor.py            #   Supervisor 路由节点
+│   │   ├── memory_agent.py          #   Memory Agent（三轮检索）
+│   │   ├── emotion_agent.py         #   Emotion Agent（情绪感知）
+│   │   └── conversation_agent.py    #   Conversation Agent（对话生成）
+│   │
+│   ├── rag/                         # RAG 检索管道
+│   │   ├── query_rewriter.py        #   Query 多角度改写
+│   │   ├── hyde.py                  #   HyDE 假设文档生成
+│   │   ├── retriever.py             #   FTS5 + LanceDB 混合检索
+│   │   ├── reranker.py              #   Cross-Encoder 重排序
+│   │   └── compressor.py            #   上下文压缩
+│   │
+│   ├── memory/                      # 分层记忆系统
+│   │   ├── episodic.py              #   Episodic Memory（写缓冲）
+│   │   ├── semantic.py              #   Semantic Memory（长期事实库）
+│   │   └── reflection.py            #   记忆反思提炼
+│   │
+│   ├── preprocessing/               # 导入预处理 Pipeline
+│   │   ├── chunker.py               #   聊天日自动切分
+│   │   ├── chunk_analyzer.py        #   LLM 并行分析
+│   │   ├── pipeline.py              #   主编排器（Map-Only）
+│   │   └── writer.py                #   结果写入 + profile 追加
+│   │
+│   ├── chat_graph.py                # 向后兼容封装
+│   ├── custom_embeddings.py         # 自定义向量嵌入
+│   └── documents/                   # LanceDB 本地存储
+│
+├── api/                             # FastAPI 路由
+│   ├── auth.py, user.py             #   认证 & 用户
+│   ├── character.py, friend.py      #   角色 & 好友管理
+│   ├── chat.py                      #   对话（含 WebSocket 语音）
+│   ├── message.py                   #   消息历史
+│   ├── import_data.py               #   微信导入 + 预处理触发
+│   ├── memory.py                    #   记忆管理器 API
+│   ├── asr.py                       #   语音识别
+│   ├── voice.py                     #   自定义音色训练
+│   └── homepage.py                  #   首页
+│
+├── web/                             # Django 模型 + 迁移
+│   └── models/
+│       ├── user.py                  #   UserProfile
+│       ├── character.py             #   Character, Voice
+│       ├── friend.py                #   Friend, Message, SystemPrompt
+│       ├── chat_message.py          #   ChatMessage (FTS5 索引)
+│       ├── memory.py                #   EpisodicMemory, SemanticMemory
+│       └── import_analysis.py       #   ImportAnalysis, TimeChunk, TopicTag
+│
+├── frontend/                        # Vue 3 前端
 │   └── src/
-│       ├── components/      # 聊天界面、导航栏等
-│       ├── views/           # 页面
-│       └── stores/          # Pinia 状态管理
+│       ├── components/character/chat_field/
+│       │   ├── ChatField.vue        #   聊天主界面
+│       │   ├── MemoryManager.vue    #   记忆管理器
+│       │   └── input_field/         #   输入栏（含语音按钮）
+│       ├── views/                   #   页面
+│       └── stores/                  #   Pinia 状态管理
+│
+├── tests/                           # 测试（26 个用例）
+│   ├── test_rag.py                  #   RAG 管道测试
+│   ├── test_memory.py               #   记忆系统测试
+│   ├── test_agents.py               #   Multi-Agent 测试
+│   └── test_smoke.py                #   基础设施冒烟测试
+│
 └── tools/
-    └── wechat_parser.py     # 微信聊天记录解析器
+    └── wechat_parser.py             # 微信聊天记录解析器
 ```
 
-## 🚀 快速开始 | Quick Start
+---
+
+## 🚀 快速开始
 
 ### 环境要求
 
 - Python >= 3.12
 - Node.js >= 18
-- uv (Python 包管理器)
+- uv（Python 包管理器）
 
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/liujunjie20240416/zhaojingying-2024.4.16.git
-cd zhaojingying-2024.4.16
+git clone https://github.com/liujunjie20240416/zhaojingying-cc.git
+cd zhaojingying-cc
 ```
 
 ### 2. 后端配置
@@ -90,7 +226,7 @@ cp .env.example .env
 # 编辑 .env，填入你的 API Key
 
 # 运行数据库迁移
-python manage.py migrate  # 或使用 Django manage.py
+python manage.py migrate
 
 # 启动服务
 uvicorn main:app --reload --port 8000
@@ -101,45 +237,40 @@ uvicorn main:app --reload --port 8000
 ```bash
 cd frontend
 npm install
-npm run dev        # 开发模式，默认 http://localhost:5173
+npm run dev        # 开发模式 → http://localhost:5173
 npm run build      # 生产构建 → static/frontend/
 ```
 
 ### 4. 导入微信聊天记录
 
-1. 将微信导出的 `.txt` 聊天记录放入项目
+1. 将微信导出的 `.txt` 聊天记录准备好
 2. 在前端角色管理页面，点击「导入微信记录」
-3. 系统会自动解析、过滤噪音、构建向量索引
+3. 系统自动：解析 → 过滤噪音 → 构建向量索引 → 触发预处理 Pipeline
+4. 预处理在后台异步运行，前端可轮询进度，完成后自动生成时间段标签、话题标签、语义记忆
 
-## 🔧 环境变量 | Environment Variables
+---
+
+## 🔧 环境变量
 
 复制 `.env.example` 为 `.env` 并配置：
 
 | 变量 | 说明 |
 |------|------|
-| `DJANGO_SECRET_KEY` | Django 密钥（用于 session / JWT 签名） |
+| `DJANGO_SECRET_KEY` | Django 密钥（JWT 签名） |
 | `API_KEY` | DashScope API 密钥 |
 | `API_BASE` | API 端点地址 |
 | `WSS_URL` | WebSocket 地址（语音） |
 | `VOICE_URL` | TTS 服务地址 |
 
-## 🤝 贡献 | Contributing
+---
 
-欢迎提交 Issue 和 Pull Request！
-
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建 Pull Request
-
-## 📄 许可 | License
+## 📄 许可
 
 MIT License
 
-## 👤 作者 | Author
+## 👤 作者
 
-**Junjie Liu** — 上海师范大学
+**Junjie Liu**
 
 - GitHub: [@liujunjie20240416](https://github.com/liujunjie20240416)
 
