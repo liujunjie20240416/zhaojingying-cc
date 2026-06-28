@@ -47,29 +47,60 @@ Memory Agent 内部使用查询改写、HyDE、混合检索、重排序和压缩
 
 ### 分层记忆系统
 
+项目把“聊天原文”和“长期事实”拆开处理：原始消息继续保留在 `ChatMessage` 里做全文/向量检索，而每轮新对话和导入记录中沉淀出的长期信息会进入记忆系统。
+
 | 记忆层 | 存储 | 用途 |
 | --- | --- | --- |
-| Episodic Memory | SQLite + LanceDB | 原始对话片段、导入后的写缓冲、可检索事件 |
-| Semantic Memory | SQLite + LanceDB | 长期事实、偏好、身份、关系、经历和角色设定 |
-| Reflection | LLM 后台提炼 | 从事件中抽取更稳定的长期记忆 |
+| ChatMessage | SQLite + FTS5 + LanceDB | 导入微信原文和聊天历史，是 RAG 检索的原始证据层 |
+| Episodic Memory | SQLite | 每轮新对话的事件摘要缓冲区，保存 `summary`、`keywords`、`importance` 和原始 user/AI 消息 |
+| Semantic Memory | SQLite + LanceDB | 长期事实库，保存身份、偏好、经历、关系模式和角色设定 |
+| Reflection | LLM 后台提炼 | 从高价值 Episodic Memory 中抽取更稳定的 Semantic Memory |
 
-记忆支持用户侧管理：前端提供 Memory Manager，可以查询、新增、编辑、删除语义记忆。角色设定类记忆可以被锁定，避免后续自动反思误改核心人设。
+Semantic Memory 是当前最重要的长期记忆层。每条事实不只是一段文本，还带有结构化字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `subject` | 事实主体：`user` 用户、`girlfriend` 女友/角色、`relationship` 两人关系 |
+| `category` | 事实类别：`identity` 身份/性格、`preference` 偏好、`experience` 经历、`relationship` 互动规律 |
+| `source` | 来源：`ai` 自动整理、`user` 用户手动维护、`import` 微信导入预处理 |
+| `memory_state` | 有效状态：`current` 当前有效、`historical` 历史状态、`superseded` 已替代 |
+| `is_mutable` / `is_locked` | 是否允许后续反思更新；角色事实、身份经历、导入的过去关系事实默认更保守 |
+| `valid_from` / `valid_to` | 用于表达“以前喜欢”“现在喜欢”这类随时间变化的事实 |
+
+运行时检索采用“关键词 + 向量”的双路策略：先用中文分词和英文关键词命中 `fact` 字段，再用 LanceDB 做语义补充，合并去重后优先返回当前有效、高置信度的记忆。之后系统会把活跃记忆按主体和类别同步到 `Friend.memory` 缓存，作为对话生成时的稳定上下文。
+
+前端提供 Memory Manager，可以查询、新增、编辑、删除语义记忆。用户手动维护的记忆可以直接进入长期事实库；角色设定类记忆可以被锁定，避免后续自动反思误改核心人设。
 
 ### 微信记录导入与预处理
 
-导入微信 `.txt` 后，后端会完成解析、过滤、入库、向量索引和异步分析：
+导入微信 `.txt` 后，后端会完成解析、过滤、入库、向量索引和异步分析。预处理目标不是简单总结聊天记录，而是把历史对话拆成可检索的时间线、话题索引、关系概览和长期记忆。
 
 ```text
 微信导出文本
   -> tools/wechat_parser.py
   -> ChatMessage / FTS5
-  -> Chunking: 按聊天日和时间边界切片
-  -> Map-only LLM analysis
-  -> TimeChunk / TopicTag / SemanticMemory
-  -> 自动补充 Character profile
+  -> Chunking: 按聊天日和时间边界切片，0 次 LLM
+  -> Map: 多个 chunk 并行调用 LLM，抽取当天摘要、话题、事件和三类 fragments
+  -> Relationship Reduce: 汇总关系演变、阶段时间线和整体关系概览
+  -> Write: 写入 TimeChunk / TopicTag / SemanticMemory / ImportAnalysis / Character profile
 ```
 
-预处理会生成时间段标签、话题标签、用户事实和角色事实，便于后续聊天时按时间、话题和语义一起找回相关上下文。
+预处理分成四个阶段：
+
+| 阶段 | 说明 | 主要产物 |
+| --- | --- | --- |
+| Chunking | 按聊天日和消息时间边界切分，不调用 LLM，保留每段的消息 index 范围 | `chunks` |
+| Map | 多线程并行分析每个 chunk，最多保留最近 60 条消息作为 LLM 输入，并可在少量失败 chunk 上使用相邻摘要补救重试 | `chunk_summary`、`topics`、`key_events`、`user_fragments`、`girlfriend_fragments`、`relationship_fragments` |
+| Relationship Reduce | 基于所有 chunk 结果生成整体关系概览和阶段性时间线，用于角色 system prompt 和后续关系理解 | `relationship_overview`、`timeline_json` |
+| Write | 纯代码落库，清理旧导入分析，聚合话题，写入长期记忆，并把角色相关事实追加到 `Character.profile` 的自动学习区块 | `ImportAnalysis`、`TimeChunk`、`TopicTag`、`SemanticMemory` |
+
+Map 阶段会严格区分三类长期信息：
+
+- `user_fragments`：关于真实用户的身份、偏好、经历和互动规律，写入 `SemanticMemory(subject="user")`
+- `girlfriend_fragments`：关于女友/角色的性格、身份、偏好和说话风格，写入 `SemanticMemory(subject="girlfriend")`，并补充到角色 profile
+- `relationship_fragments`：两人的共同经历、约定、冲突与和好方式、相处模式，写入 `SemanticMemory(subject="relationship")`
+
+导入产生的事实来源标记为 `source="import"`，默认置信度为 `0.7`。系统会按事实文本去重，每个好友最多写入一定数量的高价值 fragments，并在写入后同步记忆缓存。`ImportAnalysis.total_messages` 在分析中会临时作为进度百分比使用：Map 阶段最多显示到 95%，Reduce 和写库阶段继续推进到 96%-99%，完成后再写回真实消息总数。
 
 ### 语音交互
 
