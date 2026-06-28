@@ -52,7 +52,7 @@ class TimeChunk(models.Model):
     class Meta:
         db_table = "time_chunk"
         indexes = [
-            models.Index(fields=["character", "start_msg_index"]),
+            models.Index(fields=["character", "start_msg_index"], name="tc_char_sidx"),
         ]
 
     def __str__(self):

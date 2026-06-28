@@ -125,7 +125,12 @@ def _build_chunk(index: int, msgs: list[dict]) -> dict:
         "time_start": min(timestamps)[:10] if timestamps else "",
         "time_end": max(timestamps)[:10] if timestamps else "",
         "messages": [
-            {"sender": m["sender"], "content": m["content"], "timestamp": m.get("timestamp", "")}
+            {
+                "sender": m["sender"],
+                "content": m["content"],
+                "timestamp": m.get("timestamp", ""),
+                "msg_index": m["msg_index"],
+            }
             for m in msgs
         ],
     }

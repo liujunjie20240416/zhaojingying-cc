@@ -43,8 +43,8 @@ if assets_dir.exists():
     app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 media_dir = PROJECT_ROOT / "media"
-if media_dir.exists():
-    app.mount("/media", StaticFiles(directory=str(media_dir)), name="media")
+media_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(media_dir)), name="media")
 
 # Django admin static files
 import django.contrib.admin as admin_module

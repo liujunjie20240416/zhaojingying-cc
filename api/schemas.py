@@ -36,8 +36,10 @@ class MemoryCreateRequest(BaseModel):
     friend_id: int
     fact: str = Field(min_length=1, max_length=500)
     category: str
+    subject: str = "user"
 
 
 class MemoryUpdateRequest(BaseModel):
     fact: str = Field(min_length=1, max_length=500)
     category: str
+    subject: str = "user"

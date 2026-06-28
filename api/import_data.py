@@ -7,6 +7,7 @@ POST /api/import/wechat/  — 上传微信聊天记录文件，解析后存入 L
 import os
 import tempfile
 import threading
+import logging
 from pathlib import Path
 
 import lancedb
@@ -22,6 +23,7 @@ from web.models.import_analysis import ImportAnalysis
 from tools.wechat_parser import parse_wechat_txt, format_output_as_chunks
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # LanceDB 存储目录
 _STORAGE_DIR = str(
@@ -160,14 +162,28 @@ def _run_preprocessing_async(character_id: int):
         from ai.preprocessing.pipeline import run_preprocessing
 
         run_preprocessing(character_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception("[Import] Preprocessing failed for character_id=%s", character_id)
+        try:
+            ImportAnalysis.objects.update_or_create(
+                character_id=character_id,
+                defaults={
+                    "status": "failed",
+                    "error_message": str(exc)[:1000],
+                },
+            )
+        except Exception:
+            logger.exception("[Import] Failed to persist preprocessing error")
 
 
 @router.get("/api/import/status/")
 def import_status(character_id: int = Query(...), user=Depends(get_current_user)):
     """查询预处理进度。analyzing 时 total_messages 为进度百分比(0-100)，done 后为实际条数。"""
     try:
+        character = Character.objects.filter(id=character_id, author__user=user).first()
+        if not character:
+            return {"result": "角色不存在或不属于你"}
+
         analysis = ImportAnalysis.objects.filter(character_id=character_id).first()
         if not analysis:
             return {"result": "success", "status": "not_started"}

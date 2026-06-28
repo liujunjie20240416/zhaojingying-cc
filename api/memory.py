@@ -9,16 +9,22 @@ from web.models.memory import SemanticMemory
 
 router = APIRouter()
 _CATEGORIES = {"identity", "preference", "experience", "relationship"}
+_SUBJECTS = {"user", "girlfriend", "relationship"}
 
 
 def _serialize(memory: SemanticMemory) -> dict:
     return {
         "id": memory.id,
         "fact": memory.fact,
+        "subject": memory.subject,
         "category": memory.category,
         "confidence": memory.confidence,
         "source": memory.source,
+        "memory_state": memory.memory_state,
         "is_locked": memory.is_locked,
+        "is_mutable": memory.is_mutable,
+        "valid_from": memory.valid_from,
+        "valid_to": memory.valid_to,
     }
 
 
@@ -27,7 +33,9 @@ def list_memories(friend_id: int, user=Depends(get_current_user)):
     friend = Friend.objects.filter(id=friend_id, me__user=user).first()
     if not friend:
         return {"result": "好友不存在", "memories": []}
-    memories = SemanticMemory.objects.filter(friend=friend, is_active=True).order_by("category", "-confidence", "-id")
+    memories = SemanticMemory.objects.filter(friend=friend, is_active=True).order_by(
+        "subject", "category", "memory_state", "-confidence", "-id"
+    )
     return {"result": "success", "memories": [_serialize(memory) for memory in memories]}
 
 
@@ -35,12 +43,14 @@ def list_memories(friend_id: int, user=Depends(get_current_user)):
 def create_memory(data: MemoryCreateRequest, user=Depends(get_current_user)):
     if data.category not in _CATEGORIES:
         return {"result": "无效的记忆分类"}
+    if data.subject not in _SUBJECTS:
+        return {"result": "无效的记忆主体"}
     friend = Friend.objects.filter(id=data.friend_id, me__user=user).first()
     if not friend:
         return {"result": "好友不存在"}
     memory = add_fact(
         friend, data.fact.strip(), data.category, confidence=1.0,
-        source="user", is_locked=True,
+        source="user", is_locked=True, is_mutable=False, subject=data.subject,
     )
     sync_friend_memory_cache(friend)
     return {"result": "success", "memory": _serialize(memory)}
@@ -50,15 +60,21 @@ def create_memory(data: MemoryCreateRequest, user=Depends(get_current_user)):
 def update_memory(memory_id: int, data: MemoryUpdateRequest, user=Depends(get_current_user)):
     if data.category not in _CATEGORIES:
         return {"result": "无效的记忆分类"}
+    if data.subject not in _SUBJECTS:
+        return {"result": "无效的记忆主体"}
     memory = SemanticMemory.objects.filter(id=memory_id, friend__me__user=user, is_active=True).first()
     if not memory:
         return {"result": "记忆不存在"}
 
     memory.fact = data.fact.strip()
+    memory.subject = data.subject
     memory.category = data.category
     memory.source = "user"
     memory.is_locked = True
-    memory.save(update_fields=["fact", "category", "source", "is_locked", "updated_at"])
+    memory.is_mutable = False
+    memory.save(update_fields=[
+        "fact", "subject", "category", "source", "is_locked", "is_mutable", "updated_at",
+    ])
     _index_fact(memory.friend_id, memory.fact)
     sync_friend_memory_cache(memory.friend)
     return {"result": "success", "memory": _serialize(memory)}

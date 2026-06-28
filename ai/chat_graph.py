@@ -1,4 +1,3 @@
-import os
 import re
 from time import localtime
 from typing import TypedDict, Annotated, Sequence
@@ -17,6 +16,7 @@ from langgraph.prebuilt import ToolNode
 
 from pathlib import Path as _Path
 
+from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 from ai.custom_embeddings import CustomEmbeddings
 
 _STORAGE_DIR = str(_Path(__file__).resolve().parent / "documents" / "lancedb_storage")
@@ -185,10 +185,11 @@ class ChatGraph:
 
         tools = [get_time, search_knowledge_base, search_wechat]
 
+        require_llm_config()
         llm = ChatOpenAI(
-            model="deepseek-v4-pro",
-            openai_api_key=os.getenv("API_KEY"),
-            openai_api_base=os.getenv("API_BASE"),
+            model=llm_model(),
+            openai_api_key=llm_api_key(),
+            openai_api_base=llm_api_base(),
             streaming=True,
             model_kwargs={
                 "stream_options": {

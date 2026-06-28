@@ -1,15 +1,18 @@
 import json
-import os
 from openai import OpenAI
+
+from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 
 
 class QueryRewriter:
     """将用户原始查询改写为 2-3 个不同角度的变体，提升检索召回率"""
 
     def __init__(self, api_key: str = "", api_base: str = ""):
+        if not api_key and not api_base:
+            require_llm_config()
         self.client = OpenAI(
-            api_key=api_key or os.getenv("API_KEY"),
-            base_url=api_base or os.getenv("API_BASE"),
+            api_key=api_key or llm_api_key(),
+            base_url=api_base or llm_api_base(),
         )
 
     def rewrite(self, query: str) -> list[str]:
@@ -26,7 +29,7 @@ class QueryRewriter:
 输出格式示例：["查询角度1", "查询角度2", "查询角度3"]"""
 
         resp = self.client.chat.completions.create(
-            model="deepseek-v4-pro",
+            model=llm_model(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=200,

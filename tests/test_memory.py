@@ -43,6 +43,138 @@ class TestSemanticMemory:
         assert "other" not in cats
         assert len(cats) == 4
 
+    @pytest.mark.django_db
+    def test_subject_choices(self):
+        from web.models.memory import SemanticMemory
+        subjects = [s[0] for s in SemanticMemory.SUBJECT_CHOICES]
+        assert subjects == ["user", "girlfriend", "relationship"]
+
+    def test_default_mutability_policy(self):
+        from ai.memory.semantic import default_mutability
+        assert default_mutability("girlfriend", "identity", "import") is False
+        assert default_mutability("relationship", "experience", "import") is False
+        assert default_mutability("relationship", "relationship", "import") is False
+        assert default_mutability("user", "preference", "ai") is True
+        assert default_mutability("user", "identity", "ai") is False
+
+    @pytest.mark.django_db
+    def test_resolve_conflict_archives_old_preference(self, monkeypatch):
+        from ai.memory.semantic import add_fact, resolve_conflict
+        from web.models.memory import SemanticMemory
+        from django.contrib.auth.models import User
+        from web.models.user import UserProfile
+        from web.models.character import Character
+        from web.models.friend import Friend
+
+        monkeypatch.setattr("ai.memory.semantic._index_fact", lambda *args, **kwargs: None)
+        user = User.objects.create_user(username="memory-test")
+        profile = UserProfile.objects.create(user=user)
+        character = Character.objects.create(
+            author=profile,
+            name="女友",
+            profile="温柔",
+            photo="character/photos/default.jpg",
+            background_image="character/background_images/default.jpg",
+        )
+        friend = Friend.objects.create(me=profile, character=character)
+        old = add_fact(
+            friend=friend,
+            fact="用户喜欢吃辣",
+            subject="user",
+            category="preference",
+            source="ai",
+        )
+
+        new = resolve_conflict(friend.id, "用户喜欢吃辣", "用户现在不能吃辣")
+        old.refresh_from_db()
+
+        assert old.is_active is True
+        assert old.memory_state == "historical"
+        assert old.valid_to is not None
+        assert old.replaced_by_id == new.id
+        assert new.memory_state == "current"
+
+        current = SemanticMemory.objects.filter(friend_id=friend.id, memory_state="current")
+        historical = SemanticMemory.objects.filter(friend_id=friend.id, memory_state="historical")
+        assert current.count() == 1
+        assert historical.count() == 1
+
+
+class TestMemoryIntent:
+    def test_detect_historical_user_preference(self):
+        from ai.memory.intent import detect_memory_intent
+        intent = detect_memory_intent("我以前是不是不能吃辣？")
+        assert intent["target_subject"] == "user"
+        assert intent["time_mode"] == "historical"
+        assert intent["category_hint"] == "preference"
+        assert intent["needs_raw_chat"] is True
+
+    def test_detect_relationship_early_recall(self):
+        from ai.memory.intent import detect_memory_intent
+        intent = detect_memory_intent("你还记得我们刚认识的时候吗")
+        assert intent["target_subject"] == "relationship"
+        assert intent["time_mode"] == "early"
+        assert intent["needs_raw_chat"] is True
+
+
+class TestRelationshipOverview:
+    def test_relationship_overview_fallback(self, monkeypatch):
+        from ai.preprocessing.relationship_overview import analyze_relationship_overview
+
+        def fail_analyze(*args, **kwargs):
+            raise RuntimeError("api failed")
+
+        monkeypatch.setattr("ai.preprocessing.relationship_overview._do_analyze", fail_analyze)
+        chunks = [{
+            "index": 0,
+            "time_start": "2024-01-01",
+            "time_end": "2024-01-01",
+            "start_msg_index": 0,
+            "end_msg_index": 10,
+        }]
+        chunk_results = [{
+            "chunk_index": 0,
+            "error": False,
+            "chunk_summary": "两人开始频繁聊天",
+            "key_events": ["两人第一次互道晚安"],
+            "relationship_fragments": [{"fact": "两人形成晚安习惯", "category": "relationship"}],
+            "topics": ["关系/晚安"],
+        }]
+        result = analyze_relationship_overview(chunk_results, chunks, "女友")
+        assert "overview" in result
+        assert "两人开始频繁聊天" in result["overview"]
+        assert result["timeline"]["stages"]
+
+
+class TestPreprocessingChunker:
+    @pytest.mark.django_db
+    def test_chunk_messages_keeps_msg_index(self):
+        from django.contrib.auth.models import User
+        from web.models.user import UserProfile
+        from web.models.character import Character
+        from web.models.chat_message import ChatMessage
+        from ai.preprocessing.chunker import chunk_messages
+
+        user = User.objects.create_user(username="chunk-test")
+        profile = UserProfile.objects.create(user=user)
+        character = Character.objects.create(
+            author=profile,
+            name="女友",
+            profile="温柔",
+            photo="character/photos/default.jpg",
+            background_image="character/background_images/default.jpg",
+        )
+        ChatMessage.objects.create(
+            character=character,
+            sender="用户",
+            content="你好",
+            timestamp="2024-01-01 12:00:00",
+            msg_index=7,
+        )
+
+        chunks = chunk_messages(character.id)
+        assert chunks[0]["messages"][0]["msg_index"] == 7
+
 
 class TestReflection:
     @pytest.mark.django_db

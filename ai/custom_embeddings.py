@@ -1,14 +1,14 @@
-import os
-
 from langchain_core.embeddings import Embeddings
 from openai import OpenAI
+
+from ai.config import dashscope_api_base, dashscope_api_key
 
 
 class CustomEmbeddings(Embeddings):
     def __init__(self):
         self.client = OpenAI(
-            api_key=os.getenv("API_KEY"),
-            base_url=os.getenv("API_BASE")
+            api_key=dashscope_api_key(),
+            base_url=dashscope_api_base(),
         )
 
     def embed_documents(self, texts):

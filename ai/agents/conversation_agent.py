@@ -1,18 +1,21 @@
 # ai/agents/conversation_agent.py
-import os
 from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
+
+from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 
 
 def conversation_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
     """Conversation Agent — 生成最终回复。整合角色设定+记忆+情绪分析。
     输出: messages (追加 AI 回复)
     """
+    if not api_key and not api_base:
+        require_llm_config()
     llm = ChatOpenAI(
-        model="deepseek-v4-pro",
-        openai_api_key=api_key or os.getenv("API_KEY"),
-        openai_api_base=api_base or os.getenv("API_BASE"),
+        model=llm_model(),
+        openai_api_key=api_key or llm_api_key(),
+        openai_api_base=api_base or llm_api_base(),
     )
 
     character_profile = state.get("character_profile", "你是一个AI助手。")
@@ -35,9 +38,14 @@ def conversation_agent_node(state: dict, api_key: str = "", api_base: str = "") 
     # 关键：告诉模型不要尝试调用工具，直接用提供的上下文回复
     system_parts.append(
         "\n【重要规则】\n"
-        "1. 你无法调用任何工具或搜索功能，相关的聊天记录已经在【记忆上下文】中提供\n"
-        "2. 基于提供的上下文和角色设定直接回复，严禁编造没有在上下文中出现的事实\n"
-        "3. 如果上下文中没有相关信息，就按角色性格自然地回应，不要假装搜索或调用函数"
+        "1. 你无法调用任何工具或搜索功能，相关聊天记录和长期记忆已经在【记忆上下文】中提供\n"
+        "2. 你扮演的是继承过去女友人格、说话方式和共同记忆的角色；回复要像自然记得，而不是像数据库查询\n"
+        "3. 不要说“根据记录显示”“系统告诉我”“上下文里写着”等暴露检索过程的话\n"
+        "4. 基于提供的上下文和角色设定直接回复，严禁编造没有依据的具体事实\n"
+        "5. 如果当前状态和历史状态冲突，优先使用当前状态；提到历史时要说明那是以前/那段时间\n"
+        "6. 女友人格和共同经历不可被用户一句话随便改写；用户的新偏好和当前状态可以自然接纳\n"
+        "7. 如果上下文中没有相关信息，就按角色性格自然回应，不要假装搜索或调用函数\n"
+        "8. 回答回忆类问题时，优先给出有温度的简短回忆，再补一两句细节；不要机械罗列记忆条目"
     )
 
     system_prompt = "\n".join(system_parts)

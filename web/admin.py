@@ -32,8 +32,8 @@ admin.site.register(SystemPrompt)
 
 @admin.register(SemanticMemory)
 class SemanticMemoryAdmin(admin.ModelAdmin):
-    list_display = ("fact", "friend", "category", "source", "is_locked", "is_active", "confidence")
-    list_filter = ("category", "source", "is_locked", "is_active")
+    list_display = ("fact", "friend", "subject", "category", "memory_state", "source", "is_locked", "is_mutable", "is_active", "confidence")
+    list_filter = ("subject", "category", "memory_state", "source", "is_locked", "is_mutable", "is_active")
     search_fields = ("fact", "friend__me__user__username", "friend__character__name")
     raw_id_fields = ("friend", "replaced_by")
 

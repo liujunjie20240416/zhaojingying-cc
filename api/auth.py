@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.conf import settings
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from api.deps import get_current_user
@@ -18,7 +19,7 @@ def set_refresh_cookie(response: Response, refresh: RefreshToken):
         value=str(refresh),
         httponly=True,
         samesite="lax",
-        secure=True,
+        secure=not settings.DEBUG,
         max_age=86400 * 7,
     )
 

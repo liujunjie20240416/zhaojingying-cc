@@ -5,17 +5,19 @@
 检索需求由 ChatMessage 混合检索 (ai/rag/retriever.py) 和 Semantic Memory (ai/memory/semantic.py) 覆盖。
 """
 import json
-import os
 
 from openai import OpenAI
 
+from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 from web.models.memory import EpisodicMemory
 
 
 def _get_client(api_key: str = "", api_base: str = ""):
+    if not api_key and not api_base:
+        require_llm_config()
     return OpenAI(
-        api_key=api_key or os.getenv("API_KEY"),
-        base_url=api_base or os.getenv("API_BASE"),
+        api_key=api_key or llm_api_key(),
+        base_url=api_base or llm_api_base(),
     )
 
 
@@ -42,7 +44,7 @@ importance评分标准：
 - 0.1-0.3: 问候、客套、无实质内容"""
 
     resp = client.chat.completions.create(
-        model="deepseek-v4-pro",
+        model=llm_model(),
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
         max_tokens=1000,

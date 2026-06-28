@@ -2,7 +2,7 @@
 
 - TimeChunk: 每个 Chunk 一条，标签用日期
 - TopicTag: 纯代码聚合所有 Chunk 的话题
-- SemanticMemory: 用户事实（is_locked=False）+ 角色事实（is_locked=True）
+- SemanticMemory: 用户事实 + 女友事实 + 关系事实
 """
 
 import json
@@ -12,9 +12,16 @@ from web.models.chat_message import ChatMessage
 from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
 from web.models.friend import Friend
 from web.models.memory import SemanticMemory
+from ai.memory.semantic import add_fact, sync_friend_memory_cache
 
 
-def write_results(character_id: int, chunk_results: list[dict], chunks: list[dict], total_messages: int):
+def write_results(
+    character_id: int,
+    chunk_results: list[dict],
+    chunks: list[dict],
+    total_messages: int,
+    relationship_analysis: dict | None = None,
+):
     """写入预处理结果。chunk_results 是 Map 阶段的直接输出，不再经过 Reduce。"""
     # 清理旧数据
     ImportAnalysis.objects.filter(character_id=character_id).delete()
@@ -36,6 +43,11 @@ def write_results(character_id: int, chunk_results: list[dict], chunks: list[dic
         character=character,
         total_messages=total_messages,
         status="done",
+        relationship_overview=_relationship_overview_text(relationship_analysis, chunk_results),
+        timeline_json=json.dumps(
+            (relationship_analysis or {}).get("timeline", {}),
+            ensure_ascii=False,
+        ),
     )
 
     # 2. TimeChunk — 每个 Chunk 一条，用日期做标签
@@ -57,19 +69,25 @@ def write_results(character_id: int, chunk_results: list[dict], chunks: list[dic
     # 3. TopicTag — 纯代码聚合所有 Chunk 的话题
     _write_topic_tags(character, chunk_results, chunk_msg_map)
 
-    # 4. 用户事实 → SemanticMemory（is_locked=False，允许 reflection 更新）
+    # 4. 用户事实 → SemanticMemory
     _write_fragments_to_semantic(
         character_id, chunk_results,
-        fragment_key="user_fragments", is_locked=False,
+        fragment_key="user_fragments", subject="user",
     )
 
-    # 5. AI 角色事实 → SemanticMemory（is_locked=True，锁定不变）
+    # 5. 女友事实 → SemanticMemory（继承人格，默认锁定）
     _write_fragments_to_semantic(
         character_id, chunk_results,
-        fragment_key="character_fragments", is_locked=True,
+        fragment_key="girlfriend_fragments", subject="girlfriend",
     )
 
-    # 6. 角色事实 → Character.profile（追加，不覆盖已有内容）
+    # 6. 两人共同记忆 → SemanticMemory（导入的过去事实默认锁定）
+    _write_fragments_to_semantic(
+        character_id, chunk_results,
+        fragment_key="relationship_fragments", subject="relationship",
+    )
+
+    # 7. 女友事实 → Character.profile 自动学习区块（可重建）
     _append_fragments_to_profile(character, chunk_results)
 
 
@@ -113,16 +131,50 @@ def _write_topic_tags(character: Character, chunk_results: list[dict], chunk_msg
             )
 
 
+def _build_relationship_overview(chunk_results: list[dict]) -> str:
+    """从 chunk 摘要、关键事件和关系 fragments 生成轻量关系概览。"""
+    lines: list[str] = []
+    for r in chunk_results:
+        if r.get("error"):
+            continue
+        summary = str(r.get("chunk_summary", "")).strip()
+        if summary:
+            lines.append(f"- {summary}")
+        for event in r.get("key_events", [])[:3]:
+            event = str(event).strip()
+            if event:
+                lines.append(f"- {event}")
+        for frag in r.get("relationship_fragments", [])[:3]:
+            fact = str(frag.get("fact", "")).strip()
+            if fact:
+                lines.append(f"- {fact}")
+
+    deduped = list(dict.fromkeys(lines))
+    if not deduped:
+        return ""
+    return "从导入聊天记录中整理出的两人关系概览：\n" + "\n".join(deduped[:40])
+
+
+def _relationship_overview_text(
+    relationship_analysis: dict | None,
+    chunk_results: list[dict],
+) -> str:
+    overview = str((relationship_analysis or {}).get("overview", "")).strip()
+    if overview:
+        return overview[:5000]
+    return _build_relationship_overview(chunk_results)
+
+
 def _write_fragments_to_semantic(
     character_id: int,
     chunk_results: list[dict],
     fragment_key: str = "user_fragments",
-    is_locked: bool = False,
+    subject: str = "user",
 ):
     """将 chunk_results 中的 fragments 写入 SemanticMemory。
 
-    fragment_key: "user_fragments" 或 "character_fragments"
-    is_locked: 角色事实锁定不变，用户事实允许 reflection 更新
+    fragment_key: "user_fragments"、"girlfriend_fragments" 或 "relationship_fragments"
+    subject: "user"、"girlfriend" 或 "relationship"
     """
     friends = Friend.objects.filter(character_id=character_id)
     if not friends.exists():
@@ -152,15 +204,16 @@ def _write_fragments_to_semantic(
                 friend=friend, fact=fact, is_active=True
             ).exists():
                 continue
-            SemanticMemory.objects.create(
+            add_fact(
                 friend=friend,
                 fact=fact,
                 category=category,
                 confidence=0.7,
-                source="import",
-                is_locked=is_locked,
                 evidence="来自导入聊天记录预处理分析",
+                source="import",
+                subject=subject,
             )
+        sync_friend_memory_cache(friend)
 
 
 def _append_fragments_to_profile(character: Character, chunk_results: list[dict]):
@@ -175,7 +228,8 @@ def _append_fragments_to_profile(character: Character, chunk_results: list[dict]
     for r in chunk_results:
         if r.get("error"):
             continue
-        for frag in r.get("character_fragments", []):
+        fragments = r.get("girlfriend_fragments") or r.get("character_fragments", [])
+        for frag in fragments:
             fact = frag.get("fact", "").strip()
             if not fact or len(fact) < 6:
                 continue
@@ -184,21 +238,28 @@ def _append_fragments_to_profile(character: Character, chunk_results: list[dict]
             seen.add(fact)
             new_fragments.append(fact)
 
+    current_profile = character.profile or ""
+    marker = "【从聊天记录自动学习】"
+    base_profile = current_profile.split(marker, 1)[0].rstrip()
+
     if not new_fragments:
+        if marker in current_profile:
+            character.profile = base_profile
+            character.save(update_fields=["profile"])
         return
 
-    current_profile = character.profile or ""
-
-    # 子串匹配去重：已在 profile 中的不重复追加
+    # 子串匹配去重：已在手动基础 profile 中的不重复追加
     truly_new: list[str] = []
     for fact in new_fragments:
-        if fact not in current_profile:
+        if fact not in base_profile:
             truly_new.append(fact)
 
     if not truly_new:
+        if marker in current_profile:
+            character.profile = base_profile
+            character.save(update_fields=["profile"])
         return
 
-    # 追加到 profile 末尾
-    new_section = "\n\n【从聊天记录自动学习】\n" + "\n".join(f"- {f}" for f in truly_new)
-    character.profile = current_profile + new_section
+    new_section = f"\n\n{marker}\n" + "\n".join(f"- {f}" for f in truly_new)
+    character.profile = base_profile + new_section
     character.save(update_fields=["profile"])

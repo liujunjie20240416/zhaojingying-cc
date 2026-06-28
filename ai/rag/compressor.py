@@ -1,15 +1,18 @@
 # ai/rag/compressor.py
-import os
 from openai import OpenAI
+
+from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 
 
 class ContextCompressor:
     """LLM 上下文压缩 — 长检索结果压缩为精炼摘要，保留关键事实"""
 
     def __init__(self, api_key: str = "", api_base: str = ""):
+        if not api_key and not api_base:
+            require_llm_config()
         self.client = OpenAI(
-            api_key=api_key or os.getenv("API_KEY"),
-            base_url=api_base or os.getenv("API_BASE"),
+            api_key=api_key or llm_api_key(),
+            base_url=api_base or llm_api_base(),
         )
 
     def compress(self, context: str, max_length: int = 500) -> str:
@@ -29,7 +32,7 @@ class ContextCompressor:
 精炼摘要："""
 
         resp = self.client.chat.completions.create(
-            model="deepseek-v4-pro",
+            model=llm_model(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=600,

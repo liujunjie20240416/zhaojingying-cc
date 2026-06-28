@@ -242,7 +242,8 @@ def format_output_as_chunks(messages: list[dict], target_name: str, chunk_size: 
         lines = [f"# {target_name}的聊天记录片段 {i // chunk_size + 1}"]
         for msg in batch:
             ts = msg.get("timestamp", "")
-            lines.append(f"[{ts}] {msg['content']}")
+            sender = msg.get("sender", "")
+            lines.append(f"[{ts}] {sender}: {msg['content']}")
         chunks.append("\n".join(lines))
     return chunks
 

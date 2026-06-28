@@ -1,11 +1,11 @@
 import asyncio
 import json
-import os
 import uuid
 
 import websockets
 from fastapi import APIRouter, Depends, Query, UploadFile
 
+from ai.config import dashscope_api_key, dashscope_wss_url
 from api.deps import get_current_user
 
 router = APIRouter()
@@ -49,8 +49,8 @@ async def asr_receiver(ws):
 
 async def run_asr_tasks(pcm_data):
     task_id = uuid.uuid4().hex
-    api_key = os.getenv("API_KEY")
-    wss_url = os.getenv("WSS_URL")
+    api_key = dashscope_api_key()
+    wss_url = dashscope_wss_url()
     headers = {"Authorization": f"Bearer {api_key}"}
     async with websockets.connect(wss_url, additional_headers=headers, proxy=None) as ws:
         await ws.send(

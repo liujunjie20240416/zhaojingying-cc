@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import threading
 import uuid
 from queue import Queue
@@ -11,6 +10,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, BaseMessageChunk, SystemMessage, AIMessage
 
+from ai.config import dashscope_api_key, dashscope_wss_url
 from api.deps import get_current_user
 from api.schemas import ChatRequest
 from web.models.character import Character
@@ -72,8 +72,8 @@ async def tts_receiver(mq, ws):
 
 async def run_tts_tasks(app, inputs, mq, voice_id):
     task_id = uuid.uuid4().hex
-    api_key = os.getenv("API_KEY")
-    wss_url = os.getenv("WSS_URL")
+    api_key = dashscope_api_key()
+    wss_url = dashscope_wss_url()
     headers = {"Authorization": f"Bearer {api_key}"}
     async with websockets.connect(wss_url, additional_headers=headers, proxy=None) as ws:
         await ws.send(

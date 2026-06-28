@@ -1,19 +1,19 @@
 """自定义音色 API — DashScope Voice Enrollment。"""
 
-import os
 import uuid
 
 import requests
 from django.conf import settings
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
+from ai.config import dashscope_api_key, dashscope_voice_url
 from api.deps import get_current_user
 from web.models.character import Voice
 
 router = APIRouter()
 
-VOICE_URL = os.getenv("VOICE_URL", "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization")
-API_KEY = os.getenv("API_KEY", "")
+VOICE_URL = dashscope_voice_url()
+API_KEY = dashscope_api_key()
 
 
 def _dashscope_voice_api(action: str, **kwargs) -> dict:

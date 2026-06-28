@@ -10,6 +10,7 @@ import re
 
 from ai.rag.retriever import HybridRetriever
 from ai.rag.reranker import Reranker
+from ai.memory.intent import detect_memory_intent
 from ai.memory.semantic import search_semantic
 from web.models.chat_message import ChatMessage
 from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
@@ -193,12 +194,24 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
     reranker = Reranker(api_key, api_base)
     character_id = state.get("character_id")
     friend_id = state.get("friend_id", 0)
+    memory_intent = detect_memory_intent(user_msg)
 
     # 1. Search Semantic Memory
-    semantic_results = search_semantic(friend_id, user_msg, top_k=10)
+    semantic_results = _rank_semantic_results(
+        search_semantic(friend_id, user_msg, top_k=20),
+        memory_intent,
+    )[:10]
     semantic_facts = [r["fact"] for r in semantic_results]
-    user_facts = [r["fact"] for r in semantic_results if not r.get("is_locked", False)]
-    character_facts = [r["fact"] for r in semantic_results if r.get("is_locked", False)]
+    user_facts = [r["fact"] for r in semantic_results if r.get("subject", "user") == "user"]
+    girlfriend_facts = [r["fact"] for r in semantic_results if r.get("subject") == "girlfriend"]
+    relationship_experiences = [
+        r["fact"] for r in semantic_results
+        if r.get("subject") == "relationship" and r.get("category") == "experience"
+    ]
+    relationship_patterns = [
+        r["fact"] for r in semantic_results
+        if r.get("subject") == "relationship" and r.get("category") != "experience"
+    ]
 
     # ── 第 1 轮：时间匹配 ──
     time_chunk = _search_time_chunks(character_id, user_msg) if character_id else None
@@ -260,9 +273,13 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
     if time_context:
         parts.append(time_context)
     if user_facts:
-        parts.append("【关于用户的已知事实】\n" + "\n".join(f"- {f}" for f in user_facts))
-    if character_facts:
-        parts.append("【关于角色的已知设定】\n" + "\n".join(f"- {f}" for f in character_facts))
+        parts.append("【用户记忆】\n" + "\n".join(f"- {f}" for f in user_facts))
+    if girlfriend_facts:
+        parts.append("【女友自我记忆】\n" + "\n".join(f"- {f}" for f in girlfriend_facts))
+    if relationship_experiences:
+        parts.append("【共同经历】\n" + "\n".join(f"- {f}" for f in relationship_experiences))
+    if relationship_patterns:
+        parts.append("【关系互动规律】\n" + "\n".join(f"- {f}" for f in relationship_patterns))
     if wechat_context:
         parts.append("【相关聊天记录】\n" + wechat_context)
     if topic_messages:
@@ -274,12 +291,86 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
     if character_id:
         analysis = ImportAnalysis.objects.filter(character_id=character_id, status="done").first()
         if analysis and analysis.relationship_overview:
-            context = f"【关系演变概览】\n{analysis.relationship_overview}\n\n" + context
+            overview_parts = [analysis.relationship_overview]
+            timeline_context = _timeline_context_for_intent(analysis, memory_intent)
+            if timeline_context:
+                overview_parts.append(timeline_context)
+            context = f"【关系演变概览】\n{chr(10).join(overview_parts)}\n\n" + context
 
     return {
         "memory_context": context,
         "semantic_facts": semantic_facts,
     }
+
+
+def _rank_semantic_results(results: list[dict], intent: dict) -> list[dict]:
+    target_subject = intent.get("target_subject", "mixed")
+    category_hint = intent.get("category_hint", "any")
+    time_mode = intent.get("time_mode", "any")
+
+    def score(item: dict) -> float:
+        value = float(item.get("score", 0))
+        if target_subject != "mixed" and item.get("subject") == target_subject:
+            value += 1.0
+        if category_hint != "any" and item.get("category") == category_hint:
+            value += 0.7
+        state = item.get("memory_state", "current")
+        if time_mode in {"historical", "early", "specific_time"}:
+            if state == "historical":
+                value += 0.9
+            elif state == "current":
+                value += 0.2
+        elif time_mode in {"current", "recent", "any"}:
+            if state == "current":
+                value += 0.9
+            elif state == "historical":
+                value -= 0.2
+        return value
+
+    return sorted(results, key=score, reverse=True)
+
+
+def _timeline_context_for_intent(analysis: ImportAnalysis, intent: dict) -> str:
+    if not analysis.timeline_json:
+        return ""
+    if intent.get("target_subject") != "relationship" and intent.get("time_mode") not in {
+        "historical", "early", "recent", "specific_time",
+    }:
+        return ""
+    try:
+        timeline = json.loads(analysis.timeline_json)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    stages = timeline.get("stages") if isinstance(timeline, dict) else []
+    if not isinstance(stages, list) or not stages:
+        return ""
+
+    selected = stages
+    time_mode = intent.get("time_mode")
+    if time_mode == "early":
+        selected = stages[:2]
+    elif time_mode in {"recent", "current"}:
+        selected = stages[-2:]
+    else:
+        selected = stages[:4]
+
+    lines = ["【关系阶段】"]
+    for stage in selected[:4]:
+        if not isinstance(stage, dict):
+            continue
+        label = stage.get("label", "阶段")
+        time_range = stage.get("time_range", "")
+        summary = stage.get("summary", "")
+        state = stage.get("relationship_state", "")
+        line = f"- {label}"
+        if time_range:
+            line += f"（{time_range}）"
+        if summary:
+            line += f": {summary}"
+        if state:
+            line += f"；状态：{state}"
+        lines.append(line[:500])
+    return "\n".join(lines)
 
 
 def _rowid_in_scope(rowid: int, character_id: int, time_scope: tuple) -> bool:

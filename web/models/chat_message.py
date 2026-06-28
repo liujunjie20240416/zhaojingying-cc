@@ -23,8 +23,8 @@ class ChatMessage(models.Model):
     class Meta:
         db_table = "chat_message"
         indexes = [
-            models.Index(fields=["character", "sender"]),
-            models.Index(fields=["character", "msg_index"]),
+            models.Index(fields=["character", "sender"], name="chat_messag_charact_79437c_idx"),
+            models.Index(fields=["character", "msg_index"], name="chat_messag_charact_ac3c49_idx"),
         ]
 
     def __str__(self):

@@ -1,5 +1,5 @@
 <script setup>
-import {ref} from "vue";
+import {onUnmounted, ref} from "vue";
 import api from "@/js/http/api.js";
 
 const props = defineProps(['characterId', 'characterName'])
@@ -10,10 +10,87 @@ const targetName = ref('')
 const uploading = ref(false)
 const message = ref('')
 const isSuccess = ref(false)
+const preprocessing = ref(false)
+const preprocessingDone = ref(false)
+const progressPct = ref(0)
+let statusTimer = null
+
+function stopPolling() {
+  if (statusTimer) {
+    clearInterval(statusTimer)
+    statusTimer = null
+  }
+}
 
 function handleFileChange(e) {
   file.value = e.target.files[0] || null
   message.value = ''
+  isSuccess.value = false
+  preprocessing.value = false
+  preprocessingDone.value = false
+  progressPct.value = 0
+  stopPolling()
+}
+
+async function pollImportStatus() {
+  try {
+    const res = await api.get('/api/import/status/', {
+      params: {character_id: props.characterId},
+    })
+    const data = res.data
+
+    if (data.result !== 'success') {
+      message.value = data.result || '预处理状态查询失败'
+      isSuccess.value = false
+      preprocessing.value = false
+      stopPolling()
+      return
+    }
+
+    if (data.status === 'analyzing') {
+      progressPct.value = Number(data.progress_pct || 0)
+      const stageText = progressPct.value >= 98
+        ? '正在写入记忆...'
+        : progressPct.value >= 96
+          ? '正在总结关系演变...'
+          : '正在预处理记忆...'
+      message.value = `聊天原文导入完成，${stageText} ${progressPct.value}%`
+      isSuccess.value = true
+      preprocessing.value = true
+      return
+    }
+
+    if (data.status === 'done') {
+      progressPct.value = 100
+      preprocessing.value = false
+      preprocessingDone.value = true
+      message.value = `预处理完成！共分析 ${data.total_messages || 0} 条消息`
+      isSuccess.value = true
+      stopPolling()
+      emit('imported')
+      return
+    }
+
+    if (data.status === 'failed') {
+      preprocessing.value = false
+      preprocessingDone.value = false
+      message.value = `预处理失败：${data.error_message || '未知错误'}`
+      isSuccess.value = false
+      stopPolling()
+      return
+    }
+  } catch (err) {
+    preprocessing.value = false
+    message.value = '预处理状态查询失败，请稍后重试'
+    isSuccess.value = false
+    stopPolling()
+  }
+}
+
+function startPolling() {
+  stopPolling()
+  pollImportStatus()
+  statusTimer = setInterval(pollImportStatus, 2000)
 }
 
 async function handleImport() {
@@ -31,6 +108,10 @@ async function handleImport() {
   uploading.value = true
   message.value = '正在解析...'
   isSuccess.value = false
+  preprocessing.value = false
+  preprocessingDone.value = false
+  progressPct.value = 0
+  stopPolling()
 
   try {
     const formData = new FormData()
@@ -42,9 +123,10 @@ async function handleImport() {
     const data = res.data
 
     if (data.result === 'success') {
-      message.value = `导入成功！共 ${data.total_messages} 条消息，${data.total_chunks} 个记忆块`
+      message.value = `聊天原文导入完成！共 ${data.total_messages} 条消息，正在预处理记忆...`
       isSuccess.value = true
-      emit('imported')
+      preprocessing.value = true
+      startPolling()
     } else {
       message.value = data.result
       isSuccess.value = false
@@ -56,6 +138,8 @@ async function handleImport() {
     uploading.value = false
   }
 }
+
+onUnmounted(stopPolling)
 </script>
 
 <template>
@@ -108,6 +192,17 @@ async function handleImport() {
       :class="['alert text-sm mt-2 p-2', isSuccess ? 'alert-success' : 'alert-warning']"
     >
       <span>{{ message }}</span>
+    </div>
+
+    <progress
+      v-if="preprocessing"
+      class="progress progress-primary w-full mt-2"
+      :value="progressPct"
+      max="100"
+    ></progress>
+
+    <div v-if="preprocessingDone" class="text-xs text-success mt-2">
+      导入和预处理都已完成。
     </div>
   </div>
 </div>

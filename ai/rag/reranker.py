@@ -2,8 +2,9 @@
 """LLM Reranker — 用 API 对检索候选集打分重排序，零本地模型依赖。"""
 
 import json
-import os
 from openai import OpenAI
+
+from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 
 
 class Reranker:
@@ -13,9 +14,11 @@ class Reranker:
     """
 
     def __init__(self, api_key: str = "", api_base: str = ""):
+        if not api_key and not api_base:
+            require_llm_config()
         self.client = OpenAI(
-            api_key=api_key or os.getenv("API_KEY"),
-            base_url=api_base or os.getenv("API_BASE"),
+            api_key=api_key or llm_api_key(),
+            base_url=api_base or llm_api_base(),
         )
 
     def rerank(self, query: str, docs: list[dict], top_k: int = 5) -> list[dict]:
@@ -49,7 +52,7 @@ class Reranker:
 
         try:
             resp = self.client.chat.completions.create(
-                model="deepseek-v4-pro",
+                model=llm_model(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_tokens=1000,

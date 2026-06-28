@@ -5,10 +5,10 @@
 不再经过 EpisodicMemory 中间层，LLM 直接看完整的用户-AI对话。
 """
 import json
-import os
 from django.utils.timezone import now
 from openai import OpenAI
 
+from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 from web.models.friend import Friend, Message
 from web.models.memory import SemanticMemory
 from ai.memory.semantic import add_fact, resolve_conflict, sync_friend_memory_cache
@@ -17,7 +17,9 @@ _REFLECTION_INTERVAL_HOURS = 6
 
 
 def _get_client(api_key: str = "", api_base: str = ""):
-    return OpenAI(api_key=api_key or os.getenv("API_KEY"), base_url=api_base or os.getenv("API_BASE"))
+    if not api_key and not api_base:
+        require_llm_config()
+    return OpenAI(api_key=api_key or llm_api_key(), base_url=api_base or llm_api_base())
 
 
 def _build_existing_facts_text(friend_id: int) -> str:
@@ -25,22 +27,29 @@ def _build_existing_facts_text(friend_id: int) -> str:
     from collections import defaultdict
     grouped: dict[str, list[str]] = defaultdict(list)
     for sm in SemanticMemory.objects.filter(friend_id=friend_id, is_active=True).order_by("-confidence"):
-        locked = "，用户已确认，请勿替换" if sm.is_locked else ""
-        grouped[sm.category].append(f"  - {sm.fact} (置信度:{sm.confidence:.1f}{locked})")
+        locked = "，不可替换" if sm.is_locked or not sm.is_mutable else ""
+        state = "，历史状态" if sm.memory_state == "historical" else ""
+        grouped[f"{sm.subject}:{sm.category}"].append(
+            f"  - {sm.fact} (置信度:{sm.confidence:.1f}{locked}{state})"
+        )
 
     labels = {"identity": "身份", "preference": "偏好", "experience": "经历", "relationship": "互动规律"}
+    subject_labels = {"user": "用户", "girlfriend": "女友", "relationship": "两人关系"}
     parts = []
-    for cat in ("identity", "preference", "experience", "relationship"):
-        if grouped[cat]:
-            parts.append(f"【{labels.get(cat, cat)}】\n" + "\n".join(grouped[cat]))
+    for subject in ("user", "girlfriend", "relationship"):
+        for cat in ("identity", "preference", "experience", "relationship"):
+            key = f"{subject}:{cat}"
+            if grouped[key]:
+                parts.append(f"【{subject_labels[subject]} / {labels.get(cat, cat)}】\n" + "\n".join(grouped[key]))
     return "\n".join(parts) if parts else "（暂无已有事实）"
 
 
-def _deactivate_facts(friend_id: int, fact_texts: list[str]):
-    """批量将指定事实标记为 inactive"""
+def _archive_facts(friend_id: int, fact_texts: list[str]):
+    """批量将被替换的可变事实转为历史状态。"""
     SemanticMemory.objects.filter(
-        friend_id=friend_id, is_active=True, fact__in=fact_texts
-    ).update(is_active=False)
+        friend_id=friend_id, is_active=True, fact__in=fact_texts,
+        is_mutable=True, memory_state="current",
+    ).update(memory_state="historical", valid_to=now())
 
 
 def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api_base: str = "") -> list[dict]:
@@ -86,7 +95,7 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
 重要：这是角色扮演对话。
 - "用户" = 真实人类用户，我们需要记住的是这个人的信息
 - "AI" = AI扮演的角色，AI角色的信息不需要记录
-- 只提取关于真实用户的事实！
+- 只提取关于真实用户的新事实；不要改写女友/角色继承人格
 
 事实分类（必须四选一，不允许其他分类）：
 - identity: 用户的客观身份信息（姓名/年龄/生日/职业/地点/家庭成员等），这些不会随时间改变
@@ -117,17 +126,21 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
 - fact: 新事实（必须明确指明是"用户"，不要跟AI角色混淆）
 - confidence: 0.0-1.0，根据证据充分程度判断
 - conflicts_with: 与已有事实中某条精确冲突，填该事实的原文。null表示无精确冲突
-- replaces: 【重要】如果新事实使得某些同领域的旧事实过时了（比如口味变化、关系规律变化），把需要淘汰的旧事实原文列在这里。必须是同类型（preference替换preference，relationship替换relationship），identity和experience不要替换
+- replaces: 【重要】如果新事实使得某些同领域的旧事实成为历史状态了（比如口味变化、关系规律变化），把旧事实原文列在这里。必须是同类型（preference替换preference，relationship替换relationship），identity和experience不要替换
 
 规则：
 1. 只输出新发现，不要重复已有事实（相似度>80%就算重复）
-2. preference和relationship类型的旧事实可以被新事实整体替换（用replaces字段列出）
+2. preference和relationship类型的旧事实可以变成历史状态（用replaces字段列出），不要说成彻底忘记
 3. identity和experience一般不替换，只追加
-4. 标有“用户已确认，请勿替换”的事实绝不能填入 conflicts_with 或 replaces
-5. relationship必须是从真实对话中验证过的具体互动规律，不能是推测"""
+4. 标有“不可替换”的事实绝不能填入 conflicts_with 或 replaces
+5. relationship必须是从真实对话中验证过的具体互动规律，不能是推测
+6. 用户说"现在/最近/目前"时，优先形成当前状态事实；如果它改变了旧偏好，把旧事实放入 replaces
+7. 用户说"以前/那时候/曾经"时，优先形成历史事实，不要覆盖当前状态
+8. 用户说"又/恢复/重新可以"时，表示状态回归或再次变化，旧状态应进入 replaces
+9. 生日、出生地、过去发生过的经历不可替换；职业、城市、学校、作息、口味可以在明确表达时更新"""
 
     resp = client.chat.completions.create(
-        model="deepseek-v4-pro", messages=[{"role": "user", "content": prompt}],
+        model=llm_model(), messages=[{"role": "user", "content": prompt}],
         temperature=0.2, max_tokens=4000,
     )
     content = resp.choices[0].message.content.strip()
@@ -147,8 +160,14 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
     new_facts = []
     all_replaces: list[str] = []
     locked_facts = set(SemanticMemory.objects.filter(
-        friend=friend, is_active=True, is_locked=True
+        friend=friend, is_active=True
+    ).filter(
+        is_locked=True
     ).values_list("fact", flat=True))
+    immutable_facts = set(SemanticMemory.objects.filter(
+        friend=friend, is_active=True, is_mutable=False
+    ).values_list("fact", flat=True))
+    locked_facts |= immutable_facts
     for item in extracted:
         fact_text = str(item.get("fact", "")).strip()
         if not fact_text:
@@ -170,12 +189,13 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
                 all_replaces.append(conflicts)
         else:
             sm = add_fact(friend=friend, fact=fact_text, category=category,
-                          confidence=float(item.get("confidence", 0.5)))
+                          confidence=float(item.get("confidence", 0.5)),
+                          subject="user", source="ai")
         new_facts.append({"fact": sm.fact, "category": sm.category, "confidence": sm.confidence})
 
-    # 批量淘汰被替换的旧事实
+    # 批量将被替换的旧事实转为历史状态
     if all_replaces:
-        _deactivate_facts(friend.id, all_replaces)
+        _archive_facts(friend.id, all_replaces)
 
     sync_friend_memory_cache(friend)
     friend.last_reflection_time = now()
