@@ -109,12 +109,43 @@ Map 阶段会严格区分三类长期信息：
 - 自定义音色：DashScope Voice Enrollment
 - 实时通道：FastAPI WebSocket
 
+### 聊天体验增强
+
+前端聊天窗口提供更接近即时通讯的交互体验：
+
+- 表情标记渲染：AI 回复中的 `【开心】`、`【委屈】`、`[生气]` 等情绪标记会在前端展示为对应 emoji
+- 用户 emoji 情绪理解：用户直接输入 `🙂‍↕️`、`🥺`、`😠` 等 emoji 时，前端会把隐藏的情绪含义传给后端，帮助 AI 理解用户语气
+- 顶部状态栏：显示角色头像、角色名、在线/不在线状态，以及独立的“正在输入...”提示
+- 微信式时间分隔：历史消息会按时间段显示 `今天 14:32`、`昨天 22:10`、`7月1日 18:20` 等分隔条，短时间连续聊天不会每条都显示时间
+- 气泡细节优化：聊天气泡箭头固定在头像附近，长消息不会导致箭头下移；清除历史、记忆管理、关闭按钮统一为顶部透明工具栏
+
+这些增强主要在前端动态渲染，不改变消息正文的存储结构。历史消息仍保存原始文本，展示时再解析情绪标记和时间分隔。
+
+### 当前时间上下文工具
+
+后端内置 `current_time` 风格的内部工具，用于把当前北京时间注入聊天上下文：
+
+```text
+【当前时间】
+现在是 2026-07-02 09:30，星期四，工作日，时区 Asia/Shanghai。
+如果用户提到今天、昨天、明天、周几、周末、节日或时间安排，请以这里的当前时间为准。
+```
+
+第一版支持：
+
+- 当前日期、时间、星期几
+- 工作日/周末判断
+- 常见公历节日识别，如元旦、情人节、劳动节、国庆节、平安夜、圣诞节等
+
+后续可以扩展农历节日表，让角色理解春节、元宵、端午、七夕、中秋、除夕等日期语境。
+
 ### Web 应用能力
 
 - 用户注册、登录与 JWT 鉴权
 - 角色创建、资料编辑、头像和背景图上传
 - 好友/角色列表与聊天记录管理
 - 微信记录导入入口和后台进度轮询
+- 表情符号、输入状态、时间分隔等聊天窗口体验增强
 - Django Admin 管理后台
 - Vue 3 前端，支持开发模式和构建后由 FastAPI 托管
 
@@ -158,10 +189,11 @@ zhaojingying-cc/
 │   ├── rag/                        query rewrite、HyDE、retriever、reranker、compressor
 │   ├── memory/                     episodic、semantic、reflection、intent
 │   ├── preprocessing/              chunker、analyzer、writer、pipeline
+│   ├── tools/                      内部工具，如当前时间上下文
 │   ├── chat_graph.py               对话图兼容封装
 │   └── custom_embeddings.py        DashScope embedding 适配
 ├── web/                            Django models、admin、migrations
-├── frontend/                       Vue 3 + Vite 前端
+├── frontend/                       Vue 3 + Vite 前端，包含聊天 UI、表情和时间展示工具
 ├── tests/                          pytest 测试
 ├── tools/wechat_parser.py          微信聊天记录解析器
 ├── docs/                           设计文档和实现计划
@@ -289,6 +321,7 @@ uv run pytest
 - RAG 检索链路
 - 分层记忆系统
 - Agent 协作逻辑
+- 当前时间上下文工具
 - 基础 FastAPI/Django 冒烟测试
 
 ## GitHub 同步
