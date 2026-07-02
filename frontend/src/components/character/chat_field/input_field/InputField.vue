@@ -4,8 +4,9 @@ import MicIcon from "@/components/character/icons/MicIcon.vue";
 import {onUnmounted, ref, useTemplateRef} from "vue";
 import streamApi from "@/js/http/streamApi.js";
 import Microphone from "@/components/character/chat_field/input_field/Microphone.vue";
+import {detectUserEmojiContext} from "@/js/utils/emotionEmoji.js";
 const props = defineProps(['friendId'])
-const emit = defineEmits(['pushBackMessage','addToLastMessage'])
+const emit = defineEmits(['pushBackMessage','addToLastMessage','connectionOnline','connectionError','typingFinished'])
 const inputRef = useTemplateRef('input-ref')
 const message=ref('')
 let processId = 0
@@ -112,17 +113,24 @@ async function handleSend(event,audio_msg){
   if(!content) return
 
   const curId = ++ processId
+  const createdAt = new Date().toISOString()
   message.value = ''
-  emit('pushBackMessage',{role:'user',content:content,id:crypto.randomUUID()})
-  emit('pushBackMessage',{role:'ai',content:'',id:crypto.randomUUID()})
+  emit('connectionOnline')
+  emit('pushBackMessage',{role:'user',content:content,id:crypto.randomUUID(),createdAt})
+  emit('pushBackMessage',{role:'ai',content:'',id:crypto.randomUUID(),createdAt,isTyping:true})
     try {
     await streamApi('/api/friend/message/chat/', {
       body: {
         friend_id: props.friendId,
         message: content,
+        emotion_context: detectUserEmojiContext(content),
       },
       onmessage(data, isDone) {
         if (curId !== processId) {
+          return
+        }
+        if (isDone) {
+          emit('typingFinished')
           return
         }
         if (data.content) {
@@ -132,11 +140,11 @@ async function handleSend(event,audio_msg){
         }
       },
       onerror(err) {
-
+        emit('connectionError')
       },
     })
   } catch (err) {
-
+    emit('connectionError')
   }
 }
 function focus(){

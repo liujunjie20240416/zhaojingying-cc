@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from django.utils.timezone import localtime
 
 from api.deps import get_current_user
 from api.schemas import RemoveFriendRequest
@@ -21,7 +22,12 @@ def get_history(
             queryset = queryset.filter(pk__lt=last_message_id)
         messages_raw = queryset.order_by("-id")[:10]
         messages = [
-            {"id": m.id, "user_message": m.user_message, "output": m.output}
+            {
+                "id": m.id,
+                "user_message": m.user_message,
+                "output": m.output,
+                "create_time": localtime(m.create_time).isoformat(),
+            }
             for m in messages_raw
         ]
         return {"result": "success", "messages": messages}

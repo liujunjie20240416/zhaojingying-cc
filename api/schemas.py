@@ -30,6 +30,7 @@ class RemoveFriendRequest(BaseModel):
 class ChatRequest(BaseModel):
     friend_id: int
     message: str
+    emotion_context: list[dict[str, str]] = Field(default_factory=list)
 
 
 class MemoryCreateRequest(BaseModel):

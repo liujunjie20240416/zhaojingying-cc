@@ -1,8 +1,9 @@
 <script setup>
 
 import Message from "@/components/character/chat_field/chat_history/message/Message.vue";
-import {nextTick, onBeforeUnmount, onMounted, useTemplateRef} from "vue";
+import {computed, nextTick, onBeforeUnmount, onMounted, useTemplateRef} from "vue";
 import api from "@/js/http/api.js";
+import {formatChatTime, shouldShowTime} from "@/js/utils/chatTime.js";
 const props=defineProps(['history','friendId','character'])
 const scrollRef = useTemplateRef('scroll-ref')
 const sentinelRef = useTemplateRef('sentinel-ref')
@@ -10,6 +11,33 @@ const emit = defineEmits(['pushFrontMessage'])
 let isLoading = false
 let hasMessages = true
 let lastMessageId = 0
+
+const displayItems = computed(() => {
+  const items = []
+  let previousTime = null
+
+  for (const message of props.history) {
+    if (shouldShowTime(message.createdAt, previousTime)) {
+      items.push({
+        type: 'time',
+        id: `time-${message.id}`,
+        text: formatChatTime(message.createdAt),
+      })
+    }
+
+    items.push({
+      type: 'message',
+      id: message.id,
+      message,
+    })
+
+    if (message.createdAt) {
+      previousTime = message.createdAt
+    }
+  }
+
+  return items
+})
 
 function checkSentinelVisible() {  // 判断哨兵是否能被看到
   if (!sentinelRef.value) return false
@@ -49,11 +77,13 @@ async function loadMore(){
           role:'ai',
           content:m.output,
           id:crypto.randomUUID(),
+          createdAt:m.create_time,
         })
         emit('pushFrontMessage',{
           role:'user',
           content:m.user_message,
           id:crypto.randomUUID(),
+          createdAt:m.create_time,
         })
         lastMessageId = m.id
       }
@@ -104,12 +134,16 @@ defineExpose({
 <template>
  <div ref="scroll-ref" class="absolute top-18 left-0 w-90 h-112 overflow-y-scroll no-scrollbar">
    <div ref="sentinel-ref" class="h-2 "></div>
-   <Message
-       v-for="message in history"
-       :key="message.id"
-       :message="message"
-       :character="character"
-   />
+   <template v-for="item in displayItems" :key="item.id">
+     <div v-if="item.type === 'time'" class="chat-time-separator">
+       {{ item.text }}
+     </div>
+     <Message
+         v-else
+         :message="item.message"
+         :character="character"
+     />
+   </template>
  </div>
 </template>
 
@@ -123,5 +157,18 @@ defineExpose({
 .no-scrollbar {
   -ms-overflow-style: none; /* IE and Edge */
   scrollbar-width: none; /* Firefox */
+}
+
+.chat-time-separator {
+  width: fit-content;
+  max-width: 80%;
+  margin: 10px auto 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  line-height: 1.4;
+  backdrop-filter: blur(6px);
 }
 </style>

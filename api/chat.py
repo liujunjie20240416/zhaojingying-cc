@@ -17,6 +17,7 @@ from web.models.character import Character
 from web.models.friend import Friend, Message, SystemPrompt
 from ai.agents.supervisor_graph import create_supervisor_app
 from ai.memory.reflection import reflect_memories
+from ai.tools.time_tools import format_current_time_context
 
 router = APIRouter()
 
@@ -195,7 +196,30 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
     for sp in system_prompts:
         system_text += sp.prompt
     system_text += f"\n【角色性格】\n{friend.character.profile}\n"
+    system_text += format_current_time_context()
     system_text += f"【长期记忆】\n{friend.memory}\n"
+    system_text += (
+        "\n【表情理解规则】\n"
+        "用户消息里的 emoji 可能代表真实情绪，请结合上下文理解，不要只当装饰符号。\n"
+        "如果用户使用 🙂‍↕️，通常表示不满、别扭、有点抗拒、嘴硬或小情绪。\n"
+        "默认不要在每句回复末尾添加情绪标记或 emoji。"
+        "只有当情绪非常明确、需要强调语气时，才偶尔使用一个中文全角情绪标记，"
+        "例如【开心】【生气】【委屈】【害羞】。"
+        "不要连续多轮使用同一个情绪标记，尤其不要把【亲亲】当作固定结尾。"
+        "不要使用 [开心] 这种半角方括号格式。"
+        "每次最多使用一个情绪标记。\n"
+    )
+
+    emotion_context = []
+    for item in data.emotion_context[:8]:
+        emoji = str(item.get("emoji", ""))[:20]
+        meaning = str(item.get("meaning", ""))[:80]
+        if emoji and meaning:
+            emotion_context.append(f"{emoji}：{meaning}")
+
+    model_message = message
+    if emotion_context:
+        model_message += "\n\n【用户表情含义】\n" + "\n".join(emotion_context)
 
     messages = [SystemMessage(content=system_text)]
     message_raw = list(Message.objects.filter(friend=friend).order_by("-id")[:10])
@@ -203,7 +227,7 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
     for m in message_raw:
         messages.append(HumanMessage(content=m.user_message))
         messages.append(AIMessage(content=m.output))
-    messages.append(HumanMessage(content=message))
+    messages.append(HumanMessage(content=model_message))
 
     inputs = {
         "messages": messages,
