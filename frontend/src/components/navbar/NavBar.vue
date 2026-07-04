@@ -109,4 +109,8 @@ function handleSearch(){
 .app-glass-side :deep(svg) {
   filter: drop-shadow(0 1px 2px rgba(255, 255, 255, 0.9));
 }
+/* daisyUI 按钮(创作/登录/用户菜单)自带 text-shadow,强制覆盖加白色光晕 */
+.app-glass-bar :deep(.btn) {
+  text-shadow: 0 1px 4px rgba(255, 255, 255, 0.95), 0 0 2px rgba(255, 255, 255, 0.8) !important;
+}
 </style>
