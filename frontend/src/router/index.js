@@ -70,7 +70,8 @@ const router = createRouter({
       component:LoginIndex,
       name:'user-account-login-index',
       meta:{
-        needLogin:false
+        needLogin:false,
+        fullscreen:true
       },
     },
     {
@@ -78,7 +79,8 @@ const router = createRouter({
       component:RegisterIndex,
       name:'user-account-register-index',
       meta:{
-        needLogin:false
+        needLogin:false,
+        fullscreen:true
       },
     },
     {
