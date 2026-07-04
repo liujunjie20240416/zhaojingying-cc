@@ -98,11 +98,15 @@ function handleSearch(){
 </template>
 
 <style scoped>
-/* 顶栏/侧边栏完全透明,视频干净透过 */
-.app-glass-bar {
-  background: transparent;
-}
+/* 顶栏/侧边栏透明,文字加白色光晕投影提升可读性 */
+.app-glass-bar,
 .app-glass-side {
   background: transparent;
+  text-shadow: 0 1px 4px rgba(255, 255, 255, 0.95), 0 0 2px rgba(255, 255, 255, 0.8);
+}
+/* 图标(子组件 SVG)也加投影 */
+.app-glass-bar :deep(svg),
+.app-glass-side :deep(svg) {
+  filter: drop-shadow(0 1px 2px rgba(255, 255, 255, 0.9));
 }
 </style>
