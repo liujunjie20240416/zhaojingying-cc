@@ -57,7 +57,7 @@ async function handleRegister(){
       @submit.prevent="handleRegister"
       class="auth-card relative z-10 w-[20rem] max-w-[90vw] rounded-2xl p-8 flex flex-col"
     >
-      <h2 class="text-white text-2xl font-semibold mb-6 text-center">注册赵晶莹</h2>
+      <h2 class="text-white text-2xl font-semibold mb-6 text-center">注册</h2>
 
       <label class="text-white/80 text-sm mb-1">用户名</label>
       <input v-model="username" type="text" class="auth-input" placeholder="用户名" />
@@ -83,11 +83,11 @@ async function handleRegister(){
 
 <style scoped>
 .auth-card {
-  background: rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25);
 }
 .auth-input {
   width: 100%;
