@@ -98,18 +98,11 @@ function handleSearch(){
 </template>
 
 <style scoped>
-/* 顶栏:浅色磨砂玻璃(保持白色调,视频透出)*/
+/* 顶栏/侧边栏完全透明,视频干净透过 */
 .app-glass-bar {
-  background: rgba(255, 255, 255, 0.55);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.06);
+  background: transparent;
 }
-/* 侧边栏:浅色磨砂玻璃 */
 .app-glass-side {
-  background: rgba(255, 255, 255, 0.4);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-right: 1px solid rgba(255, 255, 255, 0.3);
+  background: transparent;
 }
 </style>
