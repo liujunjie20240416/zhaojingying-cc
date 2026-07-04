@@ -44,12 +44,13 @@ async function handleLogin(){
 </script>
 
 <template>
-  <div class="relative min-h-screen w-full flex items-center justify-center overflow-hidden">
-    <DynamicBackground :video-url="VIDEO_URL" :overlay="0.4" />
+  <div class="relative min-h-screen w-full flex items-center justify-center md:justify-start overflow-hidden">
+    <DynamicBackground :video-url="VIDEO_URL" :overlay="0.25" />
+    <div class="absolute inset-0 z-0 hidden md:block pointer-events-none side-gradient"></div>
 
     <form
       @submit.prevent="handleLogin"
-      class="auth-card relative z-10 w-[20rem] max-w-[90vw] rounded-2xl p-8 flex flex-col"
+      class="auth-card relative z-10 w-[22rem] max-w-[90vw] rounded-2xl p-8 flex flex-col md:ml-[8%] lg:ml-[12%]"
     >
       <h2 class="text-white text-2xl font-semibold mb-6 text-center">登录</h2>
 
@@ -80,6 +81,13 @@ async function handleLogin(){
   -webkit-backdrop-filter: blur(6px);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25);
+}
+/* 左侧渐变暗化:表单区清晰,右侧视频明亮 */
+.side-gradient {
+  background: linear-gradient(to right,
+    rgba(0, 0, 0, 0.65) 0%,
+    rgba(0, 0, 0, 0.3) 35%,
+    rgba(0, 0, 0, 0) 65%);
 }
 .auth-input {
   width: 100%;
