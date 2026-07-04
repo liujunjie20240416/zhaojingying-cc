@@ -8,6 +8,7 @@
 - 新增依赖 lucide-vue-next
 - 落地页接入访客动线:根路径 `/` 改为落地页门面,角色网格首页移至 `/home/`(路由名 homepage-index 不变,所有链接自动兼容),`/landing/` 保留为别名
 - 登录/注册页改为全屏动态背景:循环视频 + 白色粒子 + 鼠标视差 + 毛玻璃卡片(新增可复用组件 DynamicBackground.vue),表单逻辑零改动
+- 登录后页面(首页/好友/创作)加动态视频背景(public/bg-app.mp4):顶栏/侧边栏改深色玻璃 + data-theme=dark,DynamicBackground 复用
 
 ## v0.1.1 (2026-05-20)
 

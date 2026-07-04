@@ -1,6 +1,7 @@
 <script setup>
 
 import NavBar from "@/components/navbar/NavBar.vue";
+import DynamicBackground from "@/components/background/DynamicBackground.vue";
 import {useUserStore} from "@/stores/user.js";
 import {useRoute, useRouter} from "vue-router";
 import {onMounted} from "vue";
@@ -35,9 +36,12 @@ onMounted(async ()=>{
 <template v-if="route.meta.fullscreen">
   <RouterView/>
 </template>
-<NavBar v-else>
-  <RouterView/>
-</NavBar>
+<template v-else>
+  <DynamicBackground video-url="/bg-app.mp4" :overlay="0.5" />
+  <NavBar>
+    <RouterView/>
+  </NavBar>
+</template>
 </template>
 
 <style scoped>
