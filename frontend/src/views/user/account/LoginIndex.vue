@@ -44,13 +44,12 @@ async function handleLogin(){
 </script>
 
 <template>
-  <div class="relative min-h-screen w-full flex items-center justify-center md:justify-start overflow-hidden">
-    <DynamicBackground :video-url="VIDEO_URL" :overlay="0.25" />
-    <div class="absolute inset-0 z-0 hidden md:block pointer-events-none side-gradient"></div>
+  <div class="relative min-h-screen w-full flex items-center justify-center overflow-hidden">
+    <DynamicBackground :video-url="VIDEO_URL" :overlay="0.35" />
 
     <form
       @submit.prevent="handleLogin"
-      class="auth-card relative z-10 w-[22rem] max-w-[90vw] rounded-2xl p-8 flex flex-col md:ml-[8%] lg:ml-[12%]"
+      class="auth-card relative z-10 w-[22rem] max-w-[90vw] rounded-2xl p-8 flex flex-col"
     >
       <h2 class="text-white text-2xl font-semibold mb-6 text-center">登录</h2>
 
