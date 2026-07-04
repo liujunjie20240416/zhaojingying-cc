@@ -33,7 +33,7 @@ function handleSearch(){
   <input id="my-drawer-4" type="checkbox" class="drawer-toggle" />
   <div class="drawer-content">
     <!-- Navbar -->
-    <nav class="navbar w-full bg-base-100 shadow-sm">
+    <nav class="navbar w-full app-glass-bar">
       <div class="navbar-start">
         <label for="my-drawer-4" aria-label="open sidebar" class="btn btn-square btn-ghost">
         <!-- Sidebar toggle icon -->
@@ -64,7 +64,7 @@ function handleSearch(){
 
   <div class="drawer-side is-drawer-close:overflow-visible">
     <label for="my-drawer-4" aria-label="close sidebar" class="drawer-overlay"></label>
-    <div class="flex min-h-full flex-col items-start bg-base-200 is-drawer-close:w-16 is-drawer-open:w-54">
+    <div class="flex min-h-full flex-col items-start app-glass-side is-drawer-close:w-16 is-drawer-open:w-54">
       <!-- Sidebar content here -->
       <ul class="menu w-full grow">
         <!-- List item -->
@@ -98,5 +98,18 @@ function handleSearch(){
 </template>
 
 <style scoped>
-
+/* 顶栏:浅色磨砂玻璃(保持白色调,视频透出)*/
+.app-glass-bar {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.06);
+}
+/* 侧边栏:浅色磨砂玻璃 */
+.app-glass-side {
+  background: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-right: 1px solid rgba(255, 255, 255, 0.3);
+}
 </style>
