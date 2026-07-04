@@ -9,11 +9,21 @@ import SpaceIndex from "@/views/user/space/SpaceIndex.vue";
 import ProfileIndex from '@/views/user/profile/ProfileIndex.vue'
 import {useUserStore} from "@/stores/user.js";
 import UpdateCharacter from "@/views/create/character/UpdateCharacter.vue";
+import LandingIndex from "@/views/landing/LandingIndex.vue";
 
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    {
+      path:'/landing/',
+      component:LandingIndex,
+      name:'landing-index',
+      meta:{
+        needLogin:false,
+        fullscreen:true
+      },
+    },
     {
       path:'/',
       component:HomepageIndex,

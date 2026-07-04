@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (lumora-landing 分支)
+
+- 新增 Lumora 风格全屏电影感落地页(`/landing/`):4 段可切换背景视频 + 液态玻璃 UI + Instrument Serif 字体
+- 落地页导航映射到真实页面(首页/创作/好友),按钮跳登录页
+- App.vue 支持 `fullscreen` meta 标记,落地页跳出 NavBar 壳全屏渲染
+- 新增依赖 lucide-vue-next
+
 ## v0.1.1 (2026-05-20)
 
 - jieba 分词替换 n-gram 关键词提取，去掉无效短词（如"去校"），FTS5 匹配更精准

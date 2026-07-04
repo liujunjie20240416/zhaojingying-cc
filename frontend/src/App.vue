@@ -32,7 +32,10 @@ onMounted(async ()=>{
 </script>
 
 <template>
-<NavBar>
+<template v-if="route.meta.fullscreen">
+  <RouterView/>
+</template>
+<NavBar v-else>
   <RouterView/>
 </NavBar>
 </template>
