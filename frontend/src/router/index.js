@@ -16,16 +16,17 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
-      path:'/landing/',
+      path:'/',
       component:LandingIndex,
       name:'landing-index',
+      alias:'/landing/',
       meta:{
         needLogin:false,
         fullscreen:true
       },
     },
     {
-      path:'/',
+      path:'/home/',
       component:HomepageIndex,
       name:'homepage-index',
       meta:{
