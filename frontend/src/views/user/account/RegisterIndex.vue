@@ -114,13 +114,19 @@ async function handleRegister(){
 }
 .auth-btn {
   width: 100%;
-  background: #2C5C88;
+  background: rgba(255, 255, 255, 0.12);
   color: #fff;
   font-weight: 500;
+  border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 0.5rem;
   padding: 0.7rem;
   font-size: 0.95rem;
-  transition: background 0.2s;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  transition: background 0.2s, border-color 0.2s;
 }
-.auth-btn:hover { background: #3a7aad; }
+.auth-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.5);
+}
 </style>
