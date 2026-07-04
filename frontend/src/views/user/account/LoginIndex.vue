@@ -74,13 +74,12 @@ async function handleLogin(){
 </template>
 
 <style scoped>
-/* 毛玻璃卡片 */
+/* 无卡片底:输入框直接浮在视频上 */
 .auth-card {
-  background: rgba(255, 255, 255, 0.03);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.6);
 }
 /* 左侧渐变暗化:表单区清晰,右侧视频明亮 */
 .side-gradient {
