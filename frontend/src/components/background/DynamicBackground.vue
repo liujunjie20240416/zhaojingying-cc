@@ -2,13 +2,13 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 
 const props = defineProps({
-  videoUrl: { type: String, required: true },
-  overlay: { type: Number, default: 0.35 },   // 暗化程度,保证前景可读
-  parallax: { type: Boolean, default: true }, // 鼠标视差开关
+  videoUrl: { type: String, default: '' },
+  imageUrl: { type: String, default: '' },   // 传图片则用图片(Ken Burns),否则用视频
+  overlay: { type: Number, default: 0.35 },
+  parallax: { type: Boolean, default: true },
 })
 
 const canvasEl = ref(null)
-// 鼠标视差偏移(-1 ~ 1)
 const mx = ref(0)
 const my = ref(0)
 
@@ -81,22 +81,33 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="dyn-bg fixed inset-0 overflow-hidden bg-black -z-10">
-    <!-- 视频层(视差最强,营造纵深)-->
-    <video
-      :src="videoUrl"
-      autoplay muted loop playsinline
-      class="absolute inset-0 w-full h-full object-cover dyn-parallax"
-      :style="{ transform: `scale(1.1) translate(${mx * -18}px, ${my * -18}px)` }"
-    ></video>
+    <!-- 视差外层(平移),内层做 Ken Burns / 视频铺满 -->
+    <div
+      class="absolute inset-0 dyn-parallax"
+      :style="{ transform: `scale(1.06) translate(${mx * -16}px, ${my * -16}px)` }"
+    >
+      <img
+        v-if="imageUrl"
+        :src="imageUrl"
+        alt=""
+        class="absolute inset-0 w-full h-full object-cover ken-burns"
+      />
+      <video
+        v-else
+        :src="videoUrl"
+        autoplay muted loop playsinline
+        class="absolute inset-0 w-full h-full object-cover"
+      ></video>
+    </div>
 
-    <!-- 粒子层(视差较弱,层次感)-->
+    <!-- 粒子层(视差较弱)-->
     <canvas
       ref="canvasEl"
       class="absolute inset-0 w-full h-full pointer-events-none dyn-parallax"
       :style="{ transform: `scale(1.05) translate(${mx * -9}px, ${my * -9}px)` }"
     ></canvas>
 
-    <!-- 暗化遮罩,保证前景文字/卡片清晰 -->
+    <!-- 暗化遮罩 -->
     <div class="absolute inset-0" :style="{ background: `rgba(0,0,0,${overlay})` }"></div>
   </div>
 </template>
@@ -105,5 +116,15 @@ onBeforeUnmount(() => {
 .dyn-parallax {
   transition: transform 0.25s ease-out;
   will-change: transform;
+}
+/* Ken Burns:图片极慢放大 + 轻微平移,静图也有流动感 */
+.ken-burns {
+  animation: ken-burns 24s ease-in-out infinite alternate;
+  transform-origin: center;
+  will-change: transform;
+}
+@keyframes ken-burns {
+  0%   { transform: scale(1) translate(0, 0); }
+  100% { transform: scale(1.12) translate(-1.5%, -1%); }
 }
 </style>

@@ -37,7 +37,7 @@ onMounted(async ()=>{
   <RouterView/>
 </template>
 <template v-else>
-  <DynamicBackground video-url="/bg-app.mp4" :overlay="0.5" />
+  <DynamicBackground image-url="/bg-app.jpg" :overlay="0.5" />
   <NavBar>
     <RouterView/>
   </NavBar>
