@@ -7,10 +7,10 @@ const router = useRouter()
 
 // ---- 视频层数据 ----
 const videos = [
-  { url: 'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260702_081127_0992a171-d3c6-4978-8213-0ec5df8b6d63.mp4', label: '暖阳' },
-  { url: 'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260702_092026_dd05b805-ea0f-40b2-8c52-332b88502592.mp4', label: '静水' },
-  { url: 'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260702_081042_df7202bf-bd80-4b2b-bbc6-1f09ba2870e9.mp4', label: '深林' },
-  { url: 'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260702_080959_4cac5234-3573-464e-a5b7-76b94b8a7d61.mp4', label: '黎明' },
+  { url: '/videos/landing-1-warm.mp4', label: '暖阳' },
+  { url: '/videos/landing-2-water.mp4', label: '静水' },
+  { url: '/videos/landing-3-forest.mp4', label: '深林' },
+  { url: '/videos/landing-4-dawn.mp4', label: '黎明' },
 ]
 
 const overlayPng = 'https://soft-zoom-63098134.figma.site/_assets/v11/0b4a435b2df2747593c43d7a1c9b4578f7d8d90c.png'
