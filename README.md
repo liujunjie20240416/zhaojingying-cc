@@ -121,6 +121,15 @@ Map 阶段会严格区分三类长期信息：
 
 这些增强主要在前端动态渲染，不改变消息正文的存储结构。历史消息仍保存原始文本，展示时再解析情绪标记和时间分隔。
 
+### 界面与视觉层
+
+前端提供一套电影感视觉层，覆盖访客入口和登录后的核心页面：
+
+- 访客落地页：`/landing/` 是未登录访客的入口（Lumora 风格），全屏背景视频轮播（暖阳 / 静水 / 深林 / 黎明）配液态玻璃导航与 Instrument Serif 字体；登录后进入 `/home/` 角色主页
+- 登录 / 注册页：透明玻璃拟态表单叠加动态视频背景
+- 登录后全局背景：`DynamicBackground` 组件在首页、好友、创作等页面渲染统一的视频背景，并给导航栏、侧边栏和按钮文字加白色光晕投影，保证在视频上清晰可读
+- 视频本地化：所有背景视频已从 CDN 下载到 `frontend/public/videos/` 与 `frontend/public/bg-app.mp4`，随仓库一起版本管理，避免外链失效导致背景丢失
+
 ### 当前时间上下文工具
 
 后端内置 `current_time` 风格的内部工具，用于把当前北京时间注入聊天上下文：
@@ -193,7 +202,8 @@ zhaojingying-cc/
 │   ├── chat_graph.py               对话图兼容封装
 │   └── custom_embeddings.py        DashScope embedding 适配
 ├── web/                            Django models、admin、migrations
-├── frontend/                       Vue 3 + Vite 前端，包含聊天 UI、表情和时间展示工具
+├── frontend/                       Vue 3 + Vite 前端，含落地页、聊天 UI、DynamicBackground 视频背景组件
+│   └── public/videos/              本地化的背景视频（落地页轮播 + 登录/注册背景）
 ├── tests/                          pytest 测试
 ├── tools/wechat_parser.py          微信聊天记录解析器
 ├── docs/                           设计文档和实现计划

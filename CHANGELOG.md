@@ -11,6 +11,9 @@
 - 登录后页面(首页/好友/创作)加动态视频背景(public/bg-app.mp4):顶栏/侧边栏改深色玻璃 + data-theme=dark,DynamicBackground 复用
 - DynamicBackground 支持图片模式(imageUrl + Ken Burns 缓动缩放);登录后背景改用照片 public/bg-app.jpg(不再用视频)
 - 撤销登录后页面的深色主题改动,NavBar 还原为原白色(bg-base-100/200,无 data-theme);登录后背景改用 1080p H.264 视频 public/bg-app.mp4,overlay 0.3
+- 顶栏/侧边栏文字、图标、按钮(登录/创作/用户菜单)统一加白色光晕投影,保证在视频背景上清晰可读
+- 视频本地化:5 段背景视频(落地页 4 段 + 登录/注册 1 段)从 CDN 下载到 `public/videos/`,代码引用改为本地路径,不再依赖外链,避免 CDN 失效导致背景丢失
+- 清理无用的旧背景图 `public/bg-app.jpg`(已被 bg-app.mp4 取代,无任何引用)
 
 ## v0.1.1 (2026-05-20)
 
