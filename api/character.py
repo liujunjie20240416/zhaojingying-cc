@@ -1,5 +1,8 @@
 from fastapi import APIRouter, Depends, Form, Query, UploadFile
+import lancedb
+from django.db import connection
 from django.utils.timezone import now as djnow
+from pathlib import Path
 
 from api.deps import get_current_user
 from api.schemas import RemoveCharacterRequest
@@ -8,6 +11,26 @@ from web.utils.photo import remove_old_photo
 from web.utils.user_profile import get_or_create_user_profile
 
 router = APIRouter()
+_STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "ai" / "documents" / "lancedb_storage")
+
+
+def _remove_import_artifacts(character_id: int):
+    fts_table = f"chat_fts_{character_id}"
+    with connection.cursor() as c:
+        c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=%s",
+            [fts_table],
+        )
+        if c.fetchone():
+            c.execute(f'DROP TABLE "{fts_table}"')
+
+    table_name = f"wechat_{character_id}"
+    try:
+        db = lancedb.connect(_STORAGE_DIR)
+        if table_name in db.table_names():
+            db.drop_table(table_name)
+    except Exception:
+        pass
 
 
 @router.post("/api/create/character/create/")
@@ -34,15 +57,18 @@ def create_character(
             return {"result": "聊天背景不能为空"}
 
         voice = Voice.objects.get(id=voice_id)
-        Character.objects.create(
+        character = Character(
             author=user_profile,
             name=name,
             voice=voice,
             profile=profile,
-            photo=photo,
-            background_image=background_image,
         )
-        return {"result": "success"}
+        character.photo.save(photo.filename, photo.file, save=False)
+        character.background_image.save(
+            background_image.filename, background_image.file, save=False
+        )
+        character.save()
+        return {"result": "success", "character_id": character.id}
     except Exception:
         return {"result": "系统异常，请稍后重试"}
 
@@ -91,9 +117,11 @@ def update_character(
 def remove_character(data: RemoveCharacterRequest, user=Depends(get_current_user)):
     try:
         character = Character.objects.get(pk=data.character_id, author__user=user)
+        character_id = character.id
         remove_old_photo(character.photo)
         remove_old_photo(character.background_image)
         character.delete()
+        _remove_import_artifacts(character_id)
         return {"result": "success"}
     except Exception:
         return {"result": "系统异常，请稍后重试"}
@@ -162,4 +190,3 @@ def get_list_character(items_count: int = Query(...), user_id: int = Query(...))
         }
     except Exception:
         return {"result": "系统异常，请稍后重试"}
-

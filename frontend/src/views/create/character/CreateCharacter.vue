@@ -10,6 +10,7 @@ import {useRouter} from "vue-router";
 import {useUserStore} from "@/stores/user.js";
 import api from "@/js/http/api.js";
 import Voice from "@/views/create/character/components/Voice.vue";
+import WechatImport from "@/views/create/character/components/WechatImport.vue";
 
 
 const user = useUserStore()
@@ -22,6 +23,8 @@ const backgroundImageRef = useTemplateRef('background-image-ref')
 const errorMessage = ref('')
 const voices=ref([])
 const curVoiceId = ref(null)
+const createdCharacterId = ref(null)
+const createdCharacterName = ref('')
 
 
 onMounted(async () => {
@@ -69,12 +72,8 @@ async function handleCreate(){
       const res = await api.post('/api/create/character/create/',formData)
       const data = res.data
       if(data.result ==='success'){
-        await router.push({
-          name:'user-space-index',
-          params:{
-            user_id:user.id
-          }
-        })
+        createdCharacterId.value = data.character_id
+        createdCharacterName.value = name
       }else{
         errorMessage.value=data.result
       }
@@ -84,12 +83,21 @@ async function handleCreate(){
   }
 
 }
+
+async function handleFinish(){
+  await router.push({
+    name:'user-space-index',
+    params:{
+      user_id:user.id
+    }
+  })
+}
 </script>
 
 <template>
 <div class="flex justify-center">
   <div class="card w-120 bg-base-200 shadow-sm mt-16">
-    <div class="card-body">
+    <div v-if="!createdCharacterId" class="card-body">
       <h3 class="text-lg font-bold my-4">创建角色</h3>
       <Photo ref="photo-ref"/>
       <Name ref="name-ref"/>
@@ -100,6 +108,19 @@ async function handleCreate(){
       <p v-if="errorMessage" class="text-sm text-red-500">{{errorMessage}}</p>
       <div class="flex justify-center">
         <button @click="handleCreate" class="btn btn-neutral w-60 mt-2">创建</button>
+      </div>
+    </div>
+    <div v-else class="card-body">
+      <h3 class="text-lg font-bold my-4">导入聊天记录</h3>
+      <div class="alert alert-success text-sm p-2">
+        <span>角色已创建，可以继续导入聊天记录。</span>
+      </div>
+      <WechatImport
+        :characterId="createdCharacterId"
+        :characterName="createdCharacterName"
+      />
+      <div class="flex justify-center">
+        <button @click="handleFinish" class="btn btn-neutral w-60 mt-2">完成</button>
       </div>
     </div>
   </div>

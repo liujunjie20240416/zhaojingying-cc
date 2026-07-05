@@ -162,18 +162,12 @@ function goTo(target) {
           :style="[contentStyle, sansFont]"
         >导入真实的聊天记录,AI 会学习 TA 的语气、记忆与习惯,在往后的日子里,继续用熟悉的方式与你对话。</p>
 
-        <!-- 邮箱输入胶囊 -->
+        <!-- 抢先体验 -->
         <div
-          class="liquid-glass rounded-full flex items-center p-1.5 mt-9 w-full max-w-[320px] sm:max-w-sm"
+          class="liquid-glass rounded-full flex items-center justify-center p-1.5 mt-9"
         >
-          <input
-            type="email"
-            placeholder="留下你的邮箱"
-            class="flex-1 bg-transparent outline-none px-4 text-sm placeholder-current/60"
-            :style="[contentStyle, sansFont]"
-          />
           <button
-            class="bg-white text-black text-sm font-medium rounded-full px-5 py-2.5 whitespace-nowrap hover:bg-white/90 transition-colors"
+            class="bg-white text-black text-sm font-medium rounded-full px-8 py-2.5 whitespace-nowrap hover:bg-white/90 transition-colors"
             :style="sansFont"
             @click="goLogin"
           >抢先体验</button>
@@ -203,13 +197,13 @@ function goTo(target) {
         class="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-5 pb-6 text-white/70 text-xs sm:text-sm"
         :style="sansFont"
       >
-        <span>10,000+ 角色对话</span>
+        <span>真实聊天导入</span>
         <span class="hidden sm:inline text-white/30">|</span>
-        <span>12,000+ 创作者</span>
+        <span>长期记忆沉淀</span>
         <span class="hidden sm:inline text-white/30">|</span>
-        <span>4.8 用户满意度</span>
+        <span>延续熟悉语气</span>
         <span class="hidden sm:inline text-white/30">|</span>
-        <span>记忆优先设计</span>
+        <span>回应当下情绪</span>
       </div>
     </div>
   </section>

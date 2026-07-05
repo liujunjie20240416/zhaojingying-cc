@@ -223,7 +223,7 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
 
     # ── 第 2 轮：混合检索（有 time_scope 则缩小范围） ──
     wechat_context = ""
-    if character_id:
+    if character_id and ChatMessage.objects.filter(character_id=character_id).exists():
         # FTS5 + LanceDB 混合检索
         candidates = retriever.hybrid_search(user_msg, character_id, top_k=30, use_hyde=False)
 
