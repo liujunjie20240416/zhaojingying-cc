@@ -9,6 +9,7 @@ import json
 from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.tracing import record_trace
 
 
 def _get_client(api_key: str = "", api_base: str = ""):
@@ -114,6 +115,17 @@ def _do_analyze(entries: list[dict], target_name: str, api_key: str, api_base: s
 - current_state 只描述聊天记录末尾能支持的状态，不要推断现实关系结局
 - 如果时间不完整，用消息范围辅助判断阶段"""
 
+    trace_inputs = {
+        "model": llm_model(),
+        "target_name": target_name,
+        "entries": entries[:160],
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    record_trace(
+        "preprocessing.relationship_overview.prompt",
+        trace_inputs,
+        metadata={"target_name": target_name, "entry_count": len(entries)},
+    )
     resp = client.chat.completions.create(
         model=llm_model(),
         messages=[{"role": "user", "content": prompt}],
@@ -143,7 +155,15 @@ def _do_analyze(entries: list[dict], target_name: str, api_key: str, api_base: s
         "sensitive_points": _ensure_list(parsed.get("sensitive_points"))[:10],
         "repair_patterns": _ensure_list(parsed.get("repair_patterns"))[:10],
     }
-    return {"overview": overview, "timeline": timeline}
+    result = {"overview": overview, "timeline": timeline}
+    record_trace(
+        "preprocessing.relationship_overview.output",
+        trace_inputs,
+        {"raw_content": content, "result": result},
+        run_type="llm",
+        metadata={"target_name": target_name, "entry_count": len(entries)},
+    )
+    return result
 
 
 def _ensure_stages(value) -> list[dict]:

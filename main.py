@@ -8,6 +8,10 @@ from dotenv import load_dotenv
 
 load_dotenv(PROJECT_ROOT / ".env")
 
+from ai.tracing import configure_langsmith_defaults
+
+configure_langsmith_defaults()
+
 # ── Django setup for ORM ──
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_settings")
 import django

@@ -1,6 +1,8 @@
 # ai/agents/supervisor.py
 """Supervisor 路由 — 基于关键词匹配，零 API 调用延迟。"""
 
+from ai.tracing import record_trace
+
 
 INTENT_ROUTE_MAP = {
     "chat": "conversation",
@@ -33,14 +35,22 @@ def supervisor_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
             break
 
     if not user_msg:
-        return {"intent": "chat", "delegate_to": "conversation"}
+        result = {"intent": "chat", "delegate_to": "conversation"}
+        record_trace("supervisor.route", {"user_msg": user_msg}, result)
+        return result
 
     for signal in EMOTIONAL_SIGNALS:
         if signal in user_msg:
-            return {"intent": "emotional", "delegate_to": "emotion"}
+            result = {"intent": "emotional", "delegate_to": "emotion", "matched_signal": signal}
+            record_trace("supervisor.route", {"user_msg": user_msg}, result)
+            return result
 
     for signal in RECALL_SIGNALS:
         if signal in user_msg:
-            return {"intent": "recall", "delegate_to": "memory"}
+            result = {"intent": "recall", "delegate_to": "memory", "matched_signal": signal}
+            record_trace("supervisor.route", {"user_msg": user_msg}, result)
+            return result
 
-    return {"intent": "chat", "delegate_to": "memory"}
+    result = {"intent": "chat", "delegate_to": "memory"}
+    record_trace("supervisor.route", {"user_msg": user_msg}, result)
+    return result

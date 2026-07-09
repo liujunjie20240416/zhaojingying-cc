@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.tracing import record_trace, serialize_messages
 
 
 def conversation_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
@@ -61,7 +62,26 @@ def conversation_agent_node(state: dict, api_key: str = "", api_base: str = "") 
         if hasattr(msg, "content") and hasattr(msg, "type"):
             chat_messages.append(msg)
 
+    record_trace(
+        "conversation_agent.final_prompt",
+        {
+            "character_profile": character_profile,
+            "memory_context": memory_context,
+            "emotion_analysis": emotion,
+            "messages": serialize_messages(chat_messages),
+        },
+        metadata=state.get("trace_metadata", {}),
+    )
     resp = llm.invoke(chat_messages)
+    record_trace(
+        "conversation_agent.final_output",
+        {
+            "messages": serialize_messages(chat_messages),
+        },
+        serialize_messages([resp])[0],
+        run_type="llm",
+        metadata=state.get("trace_metadata", {}),
+    )
     return {"messages": [resp]}
 
 

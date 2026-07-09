@@ -12,6 +12,7 @@ from ai.rag.retriever import HybridRetriever
 from ai.rag.reranker import Reranker
 from ai.memory.intent import detect_memory_intent
 from ai.memory.semantic import search_semantic
+from ai.tracing import record_trace
 from web.models.chat_message import ChatMessage
 from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
 
@@ -297,10 +298,28 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
                 overview_parts.append(timeline_context)
             context = f"【关系演变概览】\n{chr(10).join(overview_parts)}\n\n" + context
 
-    return {
+    result = {
         "memory_context": context,
         "semantic_facts": semantic_facts,
     }
+    record_trace(
+        "memory_agent.retrieval",
+        {
+            "user_msg": user_msg,
+            "friend_id": friend_id,
+            "character_id": character_id,
+            "memory_intent": memory_intent,
+            "time_chunk": time_chunk,
+            "time_scope": time_scope,
+            "semantic_results": semantic_results,
+            "wechat_context": wechat_context,
+            "topic_indices": topic_indices,
+            "topic_messages": topic_messages,
+        },
+        result,
+        metadata=state.get("trace_metadata", {}),
+    )
+    return result
 
 
 def _rank_semantic_results(results: list[dict], intent: dict) -> list[dict]:

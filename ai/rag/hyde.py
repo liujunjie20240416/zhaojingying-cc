@@ -1,6 +1,7 @@
 from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.tracing import record_trace
 
 
 class HyDEGenerator:
@@ -27,10 +28,23 @@ class HyDEGenerator:
 
 假设的聊天记录片段："""
 
+        trace_inputs = {
+            "model": llm_model(),
+            "query": query,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        record_trace("rag.hyde.prompt", trace_inputs)
         resp = self.client.chat.completions.create(
             model=llm_model(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
             max_tokens=300,
         )
-        return resp.choices[0].message.content.strip()
+        result = resp.choices[0].message.content.strip()
+        record_trace(
+            "rag.hyde.output",
+            trace_inputs,
+            {"hypothetical_document": result},
+            run_type="llm",
+        )
+        return result

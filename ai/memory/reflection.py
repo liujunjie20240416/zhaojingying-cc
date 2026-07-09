@@ -9,6 +9,7 @@ from django.utils.timezone import now
 from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.tracing import record_trace
 from web.models.friend import Friend, Message
 from web.models.memory import SemanticMemory
 from ai.memory.semantic import add_fact, resolve_conflict, sync_friend_memory_cache
@@ -139,6 +140,18 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
 8. 用户说"又/恢复/重新可以"时，表示状态回归或再次变化，旧状态应进入 replaces
 9. 生日、出生地、过去发生过的经历不可替换；职业、城市、学校、作息、口味可以在明确表达时更新"""
 
+    trace_inputs = {
+        "model": llm_model(),
+        "friend_id": friend.id,
+        "dialogue_text": dialogue_text[:6000],
+        "existing_facts": existing_text,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    record_trace(
+        "memory.reflection.prompt",
+        trace_inputs,
+        metadata={"friend_id": friend.id, "message_count": len(messages)},
+    )
     resp = client.chat.completions.create(
         model=llm_model(), messages=[{"role": "user", "content": prompt}],
         temperature=0.2, max_tokens=4000,
@@ -200,4 +213,11 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
     sync_friend_memory_cache(friend)
     friend.last_reflection_time = now()
     friend.save(update_fields=["last_reflection_time"])
+    record_trace(
+        "memory.reflection.output",
+        trace_inputs,
+        {"raw_content": content, "new_facts": new_facts, "archived_facts": all_replaces},
+        run_type="llm",
+        metadata={"friend_id": friend.id, "message_count": len(messages)},
+    )
     return new_facts

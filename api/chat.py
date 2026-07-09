@@ -17,6 +17,7 @@ from web.models.character import Character
 from web.models.friend import Friend, Message, SystemPrompt
 from ai.agents.supervisor_graph import create_supervisor_app
 from ai.memory.reflection import reflect_memories
+from ai.tracing import record_trace, serialize_messages
 from ai.tools.time_tools import format_current_time_context
 
 router = APIRouter()
@@ -25,8 +26,15 @@ router = APIRouter()
 
 
 async def tts_sender(app, inputs, mq, ws, task_id):
+    trace_metadata = inputs.get("trace_metadata", {})
     async for msg, metadata in app.astream(
-        inputs, stream_mode="messages"
+        inputs,
+        stream_mode="messages",
+        config={
+            "run_name": "chat_supervisor_graph",
+            "metadata": trace_metadata,
+            "tags": ["chat", "supervisor-graph"],
+        },
     ):
         if isinstance(msg, BaseMessageChunk):
             if msg.content:
@@ -158,6 +166,19 @@ def event_stream(app, inputs, friend, message):
         output_tokens=output_tokens,
         total_tokens=total_tokens,
     )
+    record_trace(
+        "chat.stream_output",
+        {
+            "friend_id": friend.id,
+            "character_id": friend.character.id,
+            "messages": serialize_messages(inputs.get("messages", [])),
+        },
+        {
+            "output": full_output,
+            "usage": full_usage,
+        },
+        metadata=inputs.get("trace_metadata", {}),
+    )
 
     # Reflection — read raw messages directly, no episodic intermediate step
     from django.utils.timezone import now
@@ -241,7 +262,28 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
         "semantic_facts": [],
         "friend_id": friend.id,
         "character_id": friend.character.id,
+        "trace_metadata": {
+            "friend_id": friend.id,
+            "character_id": friend.character.id,
+            "character_name": friend.character.name,
+            "chat_sender_name": friend.character.chat_sender_name or friend.character.name,
+            "entrypoint": "api/friend/message/chat",
+        },
     }
+
+    record_trace(
+        "chat.request_preprocessed",
+        {
+            "raw_user_message": message,
+            "emotion_context": emotion_context,
+            "system_prompt": system_text,
+            "recent_message_count": len(message_raw),
+            "messages": serialize_messages(messages),
+            "friend_memory_cache": friend.memory,
+            "character_profile": friend.character.profile,
+        },
+        metadata=inputs["trace_metadata"],
+    )
 
     return StreamingResponse(
         event_stream(app, inputs, friend, message),

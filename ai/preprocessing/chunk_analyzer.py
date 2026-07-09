@@ -10,6 +10,7 @@ import time
 from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.tracing import record_trace
 
 MAX_RETRIES = 0
 
@@ -121,6 +122,20 @@ def _do_analyze(
 - relationship 规律必须来自真实互动，不要根据常识推测双方心理
 - 不要编造不存在的信息"""
 
+    trace_inputs = {
+        "model": llm_model(),
+        "chunk_index": chunk["index"],
+        "target_name": target_name,
+        "time_range": time_range,
+        "prev_summary": prev_summary,
+        "next_summary": next_summary,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    record_trace(
+        "preprocessing.chunk_analyzer.prompt",
+        trace_inputs,
+        metadata={"chunk_index": chunk["index"], "target_name": target_name},
+    )
     resp = client.chat.completions.create(
         model=llm_model(),
         messages=[{"role": "user", "content": prompt}],
@@ -132,13 +147,29 @@ def _do_analyze(
     content = (message.content or "").strip()
     if not content:
         reasoning = getattr(message, "reasoning_content", "") or ""
-        return _empty_result(
+        result = _empty_result(
             chunk,
             "LLM returned empty content"
             f"; finish_reason={resp.choices[0].finish_reason}"
             f"; reasoning_len={len(reasoning)}",
         )
-    return _parse_json(content, chunk)
+        record_trace(
+            "preprocessing.chunk_analyzer.output",
+            trace_inputs,
+            {"raw_content": content, "result": result},
+            run_type="llm",
+            metadata={"chunk_index": chunk["index"], "target_name": target_name},
+        )
+        return result
+    result = _parse_json(content, chunk)
+    record_trace(
+        "preprocessing.chunk_analyzer.output",
+        trace_inputs,
+        {"raw_content": content, "result": result},
+        run_type="llm",
+        metadata={"chunk_index": chunk["index"], "target_name": target_name},
+    )
+    return result
 
 
 def _parse_json(content: str, chunk: dict) -> dict:

@@ -2,6 +2,7 @@ from langchain_core.embeddings import Embeddings
 from openai import OpenAI
 
 from ai.config import dashscope_api_base, dashscope_api_key
+from ai.tracing import record_trace
 
 
 class CustomEmbeddings(Embeddings):
@@ -19,10 +20,22 @@ class CustomEmbeddings(Embeddings):
             batch = [t for t in batch if t.strip()]
             if not batch:
                 continue
+            trace_inputs = {
+                "model": "text-embedding-v4",
+                "input": batch,
+                "dimensions": 1024,
+            }
+            record_trace("embeddings.dashscope.request", trace_inputs, run_type="embedding")
             response = self.client.embeddings.create(
                 model="text-embedding-v4",
                 input=batch,
                 dimensions=1024
+            )
+            record_trace(
+                "embeddings.dashscope.output",
+                trace_inputs,
+                {"embedding_count": len(response.data), "dimensions": 1024},
+                run_type="embedding",
             )
             all_embeddings.extend([data.embedding for data in response.data])
         return all_embeddings

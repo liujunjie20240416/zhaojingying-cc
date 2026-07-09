@@ -2,6 +2,7 @@ import json
 from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.tracing import record_trace
 
 
 class QueryRewriter:
@@ -28,6 +29,12 @@ class QueryRewriter:
 
 输出格式示例：["查询角度1", "查询角度2", "查询角度3"]"""
 
+        trace_inputs = {
+            "model": llm_model(),
+            "query": query,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        record_trace("rag.query_rewriter.prompt", trace_inputs)
         resp = self.client.chat.completions.create(
             model=llm_model(),
             messages=[{"role": "user", "content": prompt}],
@@ -49,6 +56,19 @@ class QueryRewriter:
             rewrites = [q for q in rewrites if isinstance(q, str) and q.strip()]
             if query not in rewrites:
                 rewrites.insert(0, query)
-            return rewrites[:4]
+            result = rewrites[:4]
+            record_trace(
+                "rag.query_rewriter.output",
+                trace_inputs,
+                {"raw_content": content, "rewrites": result},
+                run_type="llm",
+            )
+            return result
         except json.JSONDecodeError:
+            record_trace(
+                "rag.query_rewriter.output",
+                trace_inputs,
+                {"raw_content": content, "rewrites": [query], "error": "JSONDecodeError"},
+                run_type="llm",
+            )
             return [query]

@@ -2,6 +2,7 @@
 from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.tracing import record_trace
 
 
 class ContextCompressor:
@@ -31,10 +32,24 @@ class ContextCompressor:
 
 精炼摘要："""
 
+        trace_inputs = {
+            "model": llm_model(),
+            "context": context,
+            "max_length": max_length,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        record_trace("rag.compressor.prompt", trace_inputs)
         resp = self.client.chat.completions.create(
             model=llm_model(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=600,
         )
-        return resp.choices[0].message.content.strip()
+        result = resp.choices[0].message.content.strip()
+        record_trace(
+            "rag.compressor.output",
+            trace_inputs,
+            {"compressed_context": result},
+            run_type="llm",
+        )
+        return result

@@ -9,6 +9,7 @@ import json
 from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.tracing import record_trace
 from web.models.memory import EpisodicMemory
 
 
@@ -43,6 +44,13 @@ importance评分标准：
 - 0.4-0.7: 有信息量的日常聊天
 - 0.1-0.3: 问候、客套、无实质内容"""
 
+    trace_inputs = {
+        "model": llm_model(),
+        "user_msg": user_msg,
+        "ai_response": ai_response,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    record_trace("memory.episodic.prompt", trace_inputs)
     resp = client.chat.completions.create(
         model=llm_model(),
         messages=[{"role": "user", "content": prompt}],
@@ -57,13 +65,27 @@ importance评分标准：
         content = content.strip()
     try:
         result = json.loads(content)
-        return {
+        parsed = {
             "summary": str(result.get("summary", ""))[:200],
             "keywords": str(result.get("keywords", ""))[:200],
             "importance": max(0.0, min(1.0, float(result.get("importance", 0.5)))),
         }
+        record_trace(
+            "memory.episodic.output",
+            trace_inputs,
+            {"raw_content": content, "result": parsed},
+            run_type="llm",
+        )
+        return parsed
     except (json.JSONDecodeError, ValueError):
-        return {"summary": user_msg[:50], "keywords": "", "importance": 0.5}
+        fallback = {"summary": user_msg[:50], "keywords": "", "importance": 0.5}
+        record_trace(
+            "memory.episodic.output",
+            trace_inputs,
+            {"raw_content": content, "result": fallback, "error": "parse_failed"},
+            run_type="llm",
+        )
+        return fallback
 
 
 def write_episodic(friend, user_msg: str, ai_response: str, api_key: str = "", api_base: str = ""):

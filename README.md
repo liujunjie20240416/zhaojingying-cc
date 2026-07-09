@@ -280,8 +280,19 @@ Vite 构建产物会输出到 `static/frontend/`。构建完成后，FastAPI 的
 | `DASHSCOPE_API_BASE` | DashScope OpenAI-compatible embedding 地址 |
 | `DASHSCOPE_WSS_URL` | DashScope WebSocket 地址，用于实时语音能力 |
 | `DASHSCOPE_VOICE_URL` | DashScope 自定义音色服务地址 |
+| `LANGSMITH_TRACING` | 设为 `true` 后启用 LangSmith tracing |
+| `LANGSMITH_API_KEY` | LangSmith API Key，用于上传 traces |
+| `LANGSMITH_PROJECT` | LangSmith project 名称，默认 `zhaojingying-cc` |
 
 兼容说明：旧变量名 `API_KEY`、`API_BASE`、`WSS_URL`、`VOICE_URL` 只作为 DashScope 相关能力的兜底读取。LLM 调用应显式配置 `LLM_API_KEY`、`LLM_API_BASE` 和 `LLM_MODEL`，避免聊天模型与语音/embedding 配置混用。
+
+使用时先填写 `LANGSMITH_API_KEY`，再把 `LANGSMITH_TRACING` 改为 `true`。启用后，可以在同一个 trace 里看到：
+
+- `chat.request_preprocessed`：系统提示词、最近聊天历史、表情解释、`Friend.memory` 长期记忆缓存
+- `supervisor.route`：Supervisor 的意图路由结果
+- `memory_agent.retrieval`：语义记忆、时间段匹配、微信聊天检索、话题路由和最终 `memory_context`
+- `conversation_agent.final_prompt` / `conversation_agent.final_output`：最终进入回复模型的 messages 和模型输出
+- `preprocessing.*`、`memory.reflection.*`、`rag.*`：导入预处理、关系概览、记忆反思、查询改写和 HyDE 等非 LangChain 原生 LLM 调用
 
 ## 常用命令
 

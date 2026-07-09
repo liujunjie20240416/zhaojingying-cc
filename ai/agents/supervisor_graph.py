@@ -6,7 +6,7 @@
         ├── "emotional" → Emotion → Memory → Conversation → END
         └── default     → Memory → Emotion? → Conversation → END
 """
-from typing import TypedDict, Annotated, Sequence
+from typing import TypedDict, Annotated, Sequence, NotRequired
 from langchain_core.messages import BaseMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph import add_messages
@@ -29,6 +29,7 @@ class MultiAgentState(TypedDict):
     semantic_facts: list[str]
     friend_id: int
     character_id: int | None
+    trace_metadata: NotRequired[dict]
 
 
 STRONG_EMOTION_SIGNALS = [

@@ -5,6 +5,7 @@ import json
 from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.tracing import record_trace
 
 
 class Reranker:
@@ -50,6 +51,14 @@ class Reranker:
 - 包含具体事实的文档加分
 - 只输出JSON数组，不要任何其他文字"""
 
+        trace_inputs = {
+            "model": llm_model(),
+            "query": query,
+            "docs": docs,
+            "top_k": top_k,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        record_trace("rag.reranker.prompt", trace_inputs)
         try:
             resp = self.client.chat.completions.create(
                 model=llm_model(),
@@ -71,7 +80,19 @@ class Reranker:
                         idx, score = item
                         if isinstance(idx, int) and 0 <= idx < len(docs):
                             docs[idx]["score"] = float(score)
+            record_trace(
+                "rag.reranker.output",
+                trace_inputs,
+                {"raw_content": content, "scores": scores, "reranked_docs": docs[:top_k]},
+                run_type="llm",
+            )
         except Exception:
+            record_trace(
+                "rag.reranker.output",
+                trace_inputs,
+                {"reranked_docs": docs[:top_k], "error": "rerank_failed"},
+                run_type="llm",
+            )
             pass  # LLM 失败时保持原分数
 
         docs.sort(key=lambda d: d.get("score", 0), reverse=True)
