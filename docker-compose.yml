@@ -1,6 +1,6 @@
 services:
   app:
-    image: ghcr.io/liujunjie20240416/zhaojingying-cc:latest
+    image: ccr.ccs.tencentyun.com/ai-apps/zhaojingying-cc:latest
     container_name: zhaojingying-cc
     restart: unless-stopped
     env_file:
