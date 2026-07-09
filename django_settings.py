@@ -29,7 +29,7 @@ MIDDLEWARE = [
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "NAME": os.getenv("SQLITE_PATH", str(BASE_DIR / "db.sqlite3")),
     }
 }
 
@@ -51,7 +51,7 @@ TEMPLATES = [
 ROOT_URLCONF = "django_admin_urls"
 
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", str(BASE_DIR / "media")))
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "static"

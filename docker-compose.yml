@@ -1,0 +1,21 @@
+services:
+  app:
+    image: ghcr.io/liujunjie20240416/zhaojingying-cc:latest
+    container_name: zhaojingying-cc
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SQLITE_PATH: /app/data/db.sqlite3
+      MEDIA_ROOT: /app/media
+    ports:
+      - "8000:8000"
+    volumes:
+      - app_data:/app/data
+      - app_media:/app/media
+      - lancedb_storage:/app/ai/documents/lancedb_storage
+
+volumes:
+  app_data:
+  app_media:
+  lancedb_storage:
