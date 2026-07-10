@@ -3,10 +3,17 @@ FROM node:22-bookworm-slim AS frontend-builder
 WORKDIR /app/frontend
 
 COPY frontend/package*.json ./
-RUN npm config set fetch-retries 5 \
+RUN npm config set registry https://registry.npmjs.org \
+    && npm config set replace-registry-host always \
+    && npm config set fetch-retries 5 \
     && npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retry-maxtimeout 120000 \
-    && npm ci --no-audit --no-fund
+    && for attempt in 1 2 3; do \
+         npm ci --no-audit --no-fund && exit 0; \
+         echo "npm ci attempt ${attempt} failed; retrying"; \
+         sleep $((attempt * 10)); \
+       done; \
+       exit 1
 
 COPY frontend/ ./
 RUN npm run build
