@@ -58,7 +58,7 @@ jobs:
   push-tcr:
     name: Push to Tencent Cloud TCR
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -73,6 +73,12 @@ jobs:
           registry: ${{ env.TCR_REGISTRY }}
           username: ${{ secrets.TENCENT_REGISTRY_USERNAME }}
           password: ${{ secrets.TENCENT_REGISTRY_PASSWORD }}
+
+      - name: Test TCR upload connectivity
+        run: |
+          docker pull busybox:1.36
+          docker tag busybox:1.36 "${TCR_IMAGE_NAME}:connectivity-test"
+          timeout 5m docker push "${TCR_IMAGE_NAME}:connectivity-test"
 
       - name: Extract Docker metadata
         id: meta
@@ -89,6 +95,8 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=tcr
