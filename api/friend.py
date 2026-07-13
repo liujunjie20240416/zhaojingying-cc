@@ -5,6 +5,7 @@ from api.schemas import GetOrCreateFriendRequest, RemoveFriendRequest
 from web.models.character import Character
 from web.models.friend import Friend
 from web.utils.user_profile import get_or_create_user_profile
+from ai.memory.import_access import sync_imported_context_to_friend
 
 router = APIRouter()
 
@@ -58,6 +59,7 @@ def get_or_create_friend(
             friend = Friend.objects.create(
                 character_id=data.character_id, me=user_profile
             )
+            sync_imported_context_to_friend(friend)
         c = friend.character
         author = c.author
         return {

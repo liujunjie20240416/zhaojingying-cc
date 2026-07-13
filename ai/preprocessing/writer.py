@@ -7,29 +7,41 @@
 
 import json
 
+from django.db import transaction
 from web.models.character import Character
 from web.models.chat_message import ChatMessage
 from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
 from web.models.friend import Friend
 from web.models.memory import SemanticMemory
-from ai.memory.semantic import add_fact, sync_friend_memory_cache
+from ai.memory.semantic import (
+    add_fact,
+    add_memory_evidence,
+    rebuild_semantic_index,
+    sync_friend_memory_cache,
+)
+from ai.memory.style import build_style_profile
 
 
+@transaction.atomic
 def write_results(
     character_id: int,
     chunk_results: list[dict],
     chunks: list[dict],
     total_messages: int,
     relationship_analysis: dict | None = None,
+    style_profile: str = "",
+    total_chunks: int = 0,
 ):
     """写入预处理结果。chunk_results 是 Map 阶段的直接输出，不再经过 Reduce。"""
     # 清理旧数据
     ImportAnalysis.objects.filter(character_id=character_id).delete()
     TimeChunk.objects.filter(character_id=character_id).delete()
     TopicTag.objects.filter(character_id=character_id).delete()
+    # 导入分析是可重建投影。重跑时直接清除旧 import 事实及其证据，
+    # 不影响用户手动维护和后续 Reflection 生成的事实。
     SemanticMemory.objects.filter(
         friend__character_id=character_id, source="import"
-    ).update(is_active=False)
+    ).delete()
 
     character = Character.objects.get(id=character_id)
 
@@ -43,6 +55,10 @@ def write_results(
         character=character,
         total_messages=total_messages,
         status="done",
+        total_chunks=total_chunks,
+        completed_chunks=total_chunks,
+        failed_chunks=0,
+        stage="done",
         relationship_overview=_relationship_overview_text(relationship_analysis, chunk_results),
         timeline_json=json.dumps(
             (relationship_analysis or {}).get("timeline", {}),
@@ -50,20 +66,30 @@ def write_results(
         ),
     )
 
-    # 2. TimeChunk — 每个 Chunk 一条，用日期做标签
+    # 2. TimeChunk — AnalysisChunk 可一天多个，但运行时每天只保留一条
     valid_results = [r for r in chunk_results if not r.get("error")]
+    day_groups: dict[str, list[tuple[dict, dict]]] = {}
     for r in valid_results:
-        ci = r["chunk_index"]
-        meta = chunk_meta.get(ci, {})
-        # 标签用日期，如 "2024-03-15"
-        label = (meta.get("time_start", "") or "")[:10]
+        meta = chunk_meta.get(r["chunk_index"], {})
+        day = meta.get("chat_day") or (meta.get("time_start", "") or "")[:10]
+        day_groups.setdefault(day, []).append((r, meta))
+    for day, items in sorted(day_groups.items()):
+        reduced_day = (relationship_analysis or {}).get("day_summaries", {}).get(day, {})
+        summaries = list(dict.fromkeys(
+            str(r.get("chunk_summary", "")).strip() for r, _ in items
+            if str(r.get("chunk_summary", "")).strip()
+        ))
+        events = list(dict.fromkeys(
+            str(event).strip() for r, _ in items for event in r.get("key_events", [])
+            if str(event).strip()
+        ))
         TimeChunk.objects.create(
             character=character,
-            label=label[:100],
-            start_msg_index=meta.get("start_msg_index", 0),
-            end_msg_index=meta.get("end_msg_index", 0),
-            summary=r.get("chunk_summary", "")[:200],
-            key_events=json.dumps(r.get("key_events", []), ensure_ascii=False),
+            label=day[:100],
+            start_msg_index=min(meta.get("start_msg_index", 0) for _, meta in items),
+            end_msg_index=max(meta.get("end_msg_index", 0) for _, meta in items),
+            summary=str(reduced_day.get("summary") or "；".join(summaries))[:2000],
+            key_events=json.dumps(reduced_day.get("key_events") or events[:20], ensure_ascii=False),
         )
 
     # 3. TopicTag — 纯代码聚合所有 Chunk 的话题
@@ -72,23 +98,27 @@ def write_results(
     # 4. 用户事实 → SemanticMemory
     _write_fragments_to_semantic(
         character_id, chunk_results,
-        fragment_key="user_fragments", subject="user",
+        chunk_msg_map, fragment_key="user_fragments", subject="user",
     )
 
     # 5. 女友事实 → SemanticMemory（继承人格，默认锁定）
     _write_fragments_to_semantic(
         character_id, chunk_results,
-        fragment_key="girlfriend_fragments", subject="girlfriend",
+        chunk_msg_map, fragment_key="girlfriend_fragments", subject="girlfriend",
     )
 
     # 6. 两人共同记忆 → SemanticMemory（导入的过去事实默认锁定）
     _write_fragments_to_semantic(
         character_id, chunk_results,
-        fragment_key="relationship_fragments", subject="relationship",
+        chunk_msg_map, fragment_key="relationship_fragments", subject="relationship",
     )
 
-    # 7. 女友事实 → Character.profile 自动学习区块（可重建）
-    _append_fragments_to_profile(character, chunk_results)
+    # 7. 角色说话风格 → 独立短摘要；Character.profile 保持人工核心人设
+    character.style_profile = style_profile or _build_style_profile(chunk_results)
+    marker = "【从聊天记录自动学习】"
+    if marker in (character.profile or ""):
+        character.profile = character.profile.split(marker, 1)[0].rstrip()
+    character.save(update_fields=["style_profile", "profile"])
 
 
 def _build_chunk_msg_map(chunks: list[dict]) -> dict[int, list[int]]:
@@ -127,7 +157,7 @@ def _write_topic_tags(character: Character, chunk_results: list[dict], chunk_msg
             TopicTag.objects.create(
                 character=character,
                 tag=tag[:100],
-                msg_indices=json.dumps(sorted(msg_indices), ensure_ascii=False),
+                msg_indices=json.dumps(sorted(set(msg_indices)), ensure_ascii=False),
             )
 
 
@@ -168,6 +198,7 @@ def _relationship_overview_text(
 def _write_fragments_to_semantic(
     character_id: int,
     chunk_results: list[dict],
+    chunk_msg_map: dict[int, list[int]],
     fragment_key: str = "user_fragments",
     subject: str = "user",
 ):
@@ -176,13 +207,16 @@ def _write_fragments_to_semantic(
     fragment_key: "user_fragments"、"girlfriend_fragments" 或 "relationship_fragments"
     subject: "user"、"girlfriend" 或 "relationship"
     """
-    friends = Friend.objects.filter(character_id=character_id)
-    if not friends.exists():
-        return
+    character = Character.objects.get(id=character_id)
+    # Imported Chat is Character-scoped, but private by default. The owner's
+    # Friend is the canonical holder of imported Semantic Memory projections.
+    Friend.objects.get_or_create(character=character, me=character.author)
+    friends = Friend.objects.filter(character=character)
+    if character.imported_memory_visibility != "public":
+        friends = friends.filter(me=character.author)
 
     # 收集所有 fragment，去重
-    seen: set[str] = set()
-    all_fragments: list[dict] = []
+    fragments_by_fact: dict[str, dict] = {}
     for r in chunk_results:
         if r.get("error"):
             continue
@@ -190,30 +224,86 @@ def _write_fragments_to_semantic(
             fact = frag.get("fact", "").strip()
             if not fact or len(fact) < 6:
                 continue
-            if fact in seen:
-                continue
-            seen.add(fact)
-            all_fragments.append(frag)
+            entry = fragments_by_fact.setdefault(fact, {
+                "fragment": frag,
+                "message_refs": set(),
+            })
+            supplied_refs = frag.get("evidence_msg_indices") or []
+            allowed_refs = set(chunk_msg_map.get(r.get("chunk_index"), []))
+            valid_refs = {
+                int(ref) for ref in supplied_refs
+                if str(ref).isdigit() and int(ref) in allowed_refs
+            }
+            # Older or malformed model output still gets coarse chunk-level provenance.
+            entry["message_refs"].update(valid_refs or allowed_refs)
+
+    all_refs = {
+        ref for entry in fragments_by_fact.values() for ref in entry["message_refs"]
+    }
+    message_lookup = {
+        message.msg_index: message
+        for message in ChatMessage.objects.filter(
+            character_id=character_id, msg_index__in=all_refs
+        ).order_by("msg_index")
+    }
 
     for friend in friends:
-        for frag in all_fragments[:50]:  # 每人最多 50 条
+        for fact, entry in fragments_by_fact.items():
+            frag = entry["fragment"]
             fact = frag["fact"]
             category = frag.get("category", "identity")
-            # 跳过已存在的活跃记录
-            if SemanticMemory.objects.filter(
+            sm = SemanticMemory.objects.filter(
                 friend=friend, fact=fact, is_active=True
-            ).exists():
-                continue
-            add_fact(
-                friend=friend,
-                fact=fact,
-                category=category,
-                confidence=0.7,
-                evidence="来自导入聊天记录预处理分析",
-                source="import",
-                subject=subject,
+            ).first()
+            if not sm:
+                sm = add_fact(
+                    friend=friend,
+                    fact=fact,
+                    category=category,
+                    confidence=0.7,
+                    evidence="来自导入聊天记录预处理分析",
+                    source="import",
+                    subject=subject,
+                    index=False,
+                )
+            refs = sorted(entry["message_refs"])
+            excerpt_lines = []
+            for ref in refs[:12]:
+                message = message_lookup.get(ref)
+                if message:
+                    excerpt_lines.append(
+                        f"[{message.timestamp}] {message.sender}: {message.content[:200]}"
+                    )
+            first_message = message_lookup.get(refs[0]) if refs else None
+            chat_day = None
+            if first_message and first_message.timestamp:
+                try:
+                    import datetime
+                    chat_day = datetime.date.fromisoformat(first_message.timestamp[:10])
+                except ValueError:
+                    chat_day = None
+            add_memory_evidence(
+                sm,
+                source_type="import_chat",
+                message_refs=refs,
+                excerpt="\n".join(excerpt_lines),
+                chat_day=chat_day,
             )
+        rebuild_semantic_index(friend.id)
         sync_friend_memory_cache(friend)
+
+
+def _build_style_profile(chunk_results: list[dict]) -> str:
+    """Build a bounded always-on style signature, not a dump of character facts."""
+    facts: list[str] = []
+    for result in chunk_results:
+        if result.get("error"):
+            continue
+        for fragment in result.get("girlfriend_fragments", []):
+            fact = str(fragment.get("fact", "")).strip()
+            if fact:
+                facts.append(fact)
+    return build_style_profile(facts)
 
 
 def _append_fragments_to_profile(character: Character, chunk_results: list[dict]):

@@ -5,6 +5,7 @@
 不再经过 EpisodicMemory 中间层，LLM 直接看完整的用户-AI对话。
 """
 import json
+from django.db import transaction
 from django.utils.timezone import now
 from openai import OpenAI
 
@@ -12,9 +13,22 @@ from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 from ai.tracing import record_trace
 from web.models.friend import Friend, Message
 from web.models.memory import SemanticMemory
-from ai.memory.semantic import add_fact, resolve_conflict, sync_friend_memory_cache
+from ai.memory.chat_day import (
+    detect_day_start_hour_from_datetimes,
+    get_chat_day,
+    get_chat_day_range,
+)
+from ai.memory.semantic import (
+    add_fact, add_memory_evidence, rebuild_semantic_index,
+    resolve_conflict, sync_friend_memory_cache,
+)
 
-_REFLECTION_INTERVAL_HOURS = 6
+MIN_MESSAGES_PER_CHAT_DAY = 5
+MIN_TEXT_LENGTH_PER_CHAT_DAY = 300
+
+
+class ReflectionProcessingError(RuntimeError):
+    """Retryable model/output failure for a durable ReflectionJob."""
 
 
 def _get_client(api_key: str = "", api_base: str = ""):
@@ -53,28 +67,54 @@ def _archive_facts(friend_id: int, fact_texts: list[str]):
     ).update(memory_state="historical", valid_to=now())
 
 
-def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api_base: str = "") -> list[dict]:
+def reflect_memories(
+    friend: Friend,
+    target_chat_day=None,
+    force: bool = False,
+    api_key: str = "",
+    api_base: str = "",
+) -> list[dict]:
     """从原始对话提炼 Semantic Memory。
 
-    触发条件:
-      - force=True: 强制执行
-      - 自动: 距上次 reflection >= 6 小时 且 有新对话
+    自动模式只处理已经结束且尚未处理的聊天日；force=True 绕过门槛。
     """
-    if not force:
-        hours_since = (now() - friend.last_reflection_time).total_seconds() / 3600
-        if hours_since < _REFLECTION_INTERVAL_HOURS:
+    processed_chat_day = target_chat_day
+    if force and target_chat_day is None:
+        messages = list(Message.objects.filter(
+            friend=friend, create_time__gt=friend.last_reflection_time,
+        ).order_by("create_time")[:100])
+    else:
+        datetimes = list(Message.objects.filter(friend=friend).order_by(
+            "create_time"
+        ).values_list("create_time", flat=True))
+        if not datetimes:
             return []
-        recent_count = Message.objects.filter(
-            friend=friend, create_time__gt=friend.last_reflection_time
-        ).count()
-        if recent_count == 0:
+        day_start_hour = detect_day_start_hour_from_datetimes(datetimes)
+        current_chat_day = get_chat_day(now(), day_start_hour)
+        if processed_chat_day is None:
+            available_days = sorted({get_chat_day(dt, day_start_hour) for dt in datetimes})
+            processed_chat_day = next((day for day in available_days
+                if day < current_chat_day and (
+                    friend.last_reflected_chat_day is None
+                    or day > friend.last_reflected_chat_day
+                )), None)
+        if processed_chat_day is None or (not force and processed_chat_day >= current_chat_day):
             return []
+        start, end = get_chat_day_range(processed_chat_day, day_start_hour)
+        messages = list(Message.objects.filter(
+            friend=friend, create_time__gte=start, create_time__lt=end,
+        ).order_by("create_time")[:100])
 
-    # 读取这段时间的全部对话（最多100轮，防止上下文过大）
-    messages = list(Message.objects.filter(
-        friend=friend,
-        create_time__gt=friend.last_reflection_time,
-    ).order_by("create_time")[:100])
+        total_text_length = sum(
+            len(message.user_message or "") + len(message.output or "")
+            for message in messages
+        )
+        if not force and (
+            len(messages) < MIN_MESSAGES_PER_CHAT_DAY
+            or total_text_length < MIN_TEXT_LENGTH_PER_CHAT_DAY
+        ):
+            _mark_reflection_progress(friend, processed_chat_day)
+            return []
 
     if not messages:
         return []
@@ -84,8 +124,8 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
     # 拼成对话文本
     dialogue_lines = []
     for i, m in enumerate(messages):
-        dialogue_lines.append(f"{i+1}. 用户: {m.user_message}")
-        dialogue_lines.append(f"   AI: {m.output}")
+        dialogue_lines.append(f"{i+1}. [message_id={m.id}] 用户: {m.user_message}")
+        dialogue_lines.append(f"   [message_id={m.id}] AI: {m.output}")
     dialogue_text = "\n".join(dialogue_lines)
 
     # 全部已有事实（按分类分组）
@@ -94,9 +134,9 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
     prompt = f"""分析以下角色扮演对话，提炼关于真实用户（对话中的人类一方）的关键信息。
 
 重要：这是角色扮演对话。
-- "用户" = 真实人类用户，我们需要记住的是这个人的信息
-- "AI" = AI扮演的角色，AI角色的信息不需要记录
-- 只提取关于真实用户的新事实；不要改写女友/角色继承人格
+- "用户" = 真实人类用户
+- "AI" = 女友/角色
+- 同时允许提取用户、女友和两人关系，但必须正确区分主体
 
 事实分类（必须四选一，不允许其他分类）：
 - identity: 用户的客观身份信息（姓名/年龄/生日/职业/地点/家庭成员等），这些不会随时间改变
@@ -116,10 +156,12 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
 [
   {{
     "fact": "关于用户的一句事实",
+    "subject": "user|girlfriend|relationship",
     "category": "identity|preference|experience|relationship",
     "confidence": 0.8,
     "conflicts_with": null,
-    "replaces": []
+    "replaces": [],
+    "evidence_message_ids": [123]
   }}
 ]
 
@@ -128,6 +170,7 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
 - confidence: 0.0-1.0，根据证据充分程度判断
 - conflicts_with: 与已有事实中某条精确冲突，填该事实的原文。null表示无精确冲突
 - replaces: 【重要】如果新事实使得某些同领域的旧事实成为历史状态了（比如口味变化、关系规律变化），把旧事实原文列在这里。必须是同类型（preference替换preference，relationship替换relationship），identity和experience不要替换
+- evidence_message_ids: 只填写直接支持该事实的真实 message_id；禁止虚构编号
 
 规则：
 1. 只输出新发现，不要重复已有事实（相似度>80%就算重复）
@@ -138,7 +181,9 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
 6. 用户说"现在/最近/目前"时，优先形成当前状态事实；如果它改变了旧偏好，把旧事实放入 replaces
 7. 用户说"以前/那时候/曾经"时，优先形成历史事实，不要覆盖当前状态
 8. 用户说"又/恢复/重新可以"时，表示状态回归或再次变化，旧状态应进入 replaces
-9. 生日、出生地、过去发生过的经历不可替换；职业、城市、学校、作息、口味可以在明确表达时更新"""
+9. 生日、出生地、过去发生过的经历不可替换；职业、城市、学校、作息、口味可以在明确表达时更新
+10. 不要把少量测试消息、重复问候、无意义字符，提炼为长期偏好或互动规律；除非这种模式在多轮、多天中反复出现
+11. 两人共同约定、共同事件和互动模式必须使用 subject=relationship；AI角色自身信息使用 subject=girlfriend"""
 
     trace_inputs = {
         "model": llm_model(),
@@ -166,9 +211,9 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
     try:
         extracted = json.loads(content)
         if not isinstance(extracted, list):
-            return []
-    except json.JSONDecodeError:
-        return []
+            raise ReflectionProcessingError("Reflection output is not a JSON list")
+    except json.JSONDecodeError as exc:
+        raise ReflectionProcessingError("Reflection output is invalid JSON") from exc
 
     new_facts = []
     all_replaces: list[str] = []
@@ -181,6 +226,7 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
         friend=friend, is_active=True, is_mutable=False
     ).values_list("fact", flat=True))
     locked_facts |= immutable_facts
+    messages_by_id = {message.id: message for message in messages}
     for item in extracted:
         fact_text = str(item.get("fact", "")).strip()
         if not fact_text:
@@ -188,6 +234,9 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
         category = str(item.get("category", "preference"))
         if category not in ("identity", "preference", "experience", "relationship"):
             category = "preference"
+        subject = str(item.get("subject", "user"))
+        if subject not in ("user", "girlfriend", "relationship"):
+            subject = "user"
 
         # 收集需要替换的旧事实
         replaces = item.get("replaces")
@@ -203,7 +252,35 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
         else:
             sm = add_fact(friend=friend, fact=fact_text, category=category,
                           confidence=float(item.get("confidence", 0.5)),
-                          subject="user", source="ai")
+                          subject=subject, source="ai",
+                          evidence=(
+                              f"来自 {processed_chat_day} 的在线聊天 Reflection"
+                              if processed_chat_day else "来自在线聊天 Reflection"
+                          ),
+                          index=False)
+        evidence_ids = []
+        raw_evidence_ids = item.get("evidence_message_ids", [])
+        if isinstance(raw_evidence_ids, list):
+            for value in raw_evidence_ids:
+                try:
+                    message_id = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if message_id in messages_by_id:
+                    evidence_ids.append(message_id)
+        evidence_ids = sorted(set(evidence_ids))
+        evidence_excerpt = "\n".join(
+            f"用户: {messages_by_id[message_id].user_message[:200]}\n"
+            f"AI: {messages_by_id[message_id].output[:200]}"
+            for message_id in evidence_ids[:6]
+        )
+        add_memory_evidence(
+            sm,
+            source_type="online_chat",
+            message_refs=evidence_ids,
+            excerpt=evidence_excerpt,
+            chat_day=processed_chat_day,
+        )
         new_facts.append({"fact": sm.fact, "category": sm.category, "confidence": sm.confidence})
 
     # 批量将被替换的旧事实转为历史状态
@@ -211,8 +288,8 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
         _archive_facts(friend.id, all_replaces)
 
     sync_friend_memory_cache(friend)
-    friend.last_reflection_time = now()
-    friend.save(update_fields=["last_reflection_time"])
+    rebuild_semantic_index(friend.id)
+    _mark_reflection_progress(friend, processed_chat_day)
     record_trace(
         "memory.reflection.output",
         trace_inputs,
@@ -221,3 +298,20 @@ def reflect_memories(friend: Friend, force: bool = False, api_key: str = "", api
         metadata={"friend_id": friend.id, "message_count": len(messages)},
     )
     return new_facts
+
+
+def _mark_reflection_progress(friend: Friend, chat_day=None):
+    # Concurrent jobs must never move the progress marker backwards.
+    with transaction.atomic():
+        current = Friend.objects.select_for_update().get(id=friend.id)
+        current.last_reflection_time = now()
+        update_fields = ["last_reflection_time"]
+        if chat_day is not None and (
+            current.last_reflected_chat_day is None
+            or chat_day > current.last_reflected_chat_day
+        ):
+            current.last_reflected_chat_day = chat_day
+            update_fields.append("last_reflected_chat_day")
+        current.save(update_fields=update_fields)
+        friend.last_reflection_time = current.last_reflection_time
+        friend.last_reflected_chat_day = current.last_reflected_chat_day

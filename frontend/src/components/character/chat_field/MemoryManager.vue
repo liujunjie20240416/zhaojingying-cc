@@ -110,7 +110,7 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="absolute inset-3 z-20 overflow-y-auto rounded-box bg-base-100 p-5 shadow-xl">
+  <div class="absolute inset-0 z-20 overflow-y-auto bg-base-100 p-3 shadow-xl sm:inset-3 sm:rounded-box sm:p-5">
     <div class="mb-4 flex items-center justify-between">
       <div>
         <h3 class="text-lg font-bold">长期记忆</h3>
@@ -123,7 +123,7 @@ onMounted(load)
     <div v-if="loading" class="flex justify-center py-10"><span class="loading loading-spinner"></span></div>
 
     <template v-else>
-      <div class="tabs tabs-box mb-4">
+      <div class="tabs tabs-box mb-4 flex-nowrap overflow-x-auto">
         <button
           v-for="[value, label] in subjectTabs"
           :key="value"

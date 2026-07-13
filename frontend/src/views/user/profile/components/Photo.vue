@@ -21,9 +21,11 @@ async function openModal(photo){
   await nextTick()
 
   if(!croppie){
+    const boundarySize = Math.min(300, Math.max(180, window.innerWidth - 48))
+    const viewportSize = Math.min(200, boundarySize - 36)
     croppie=new Croppie(croppieRef.value,{
-          viewport: {width: 200, height: 200, type: 'square'},
-          boundary: {width: 300, height: 300},
+          viewport: {width: viewportSize, height: viewportSize, type: 'square'},
+          boundary: {width: boundarySize, height: boundarySize},
           enableOrientation: true,
           enforceBoundary: true,
     })
@@ -76,7 +78,7 @@ defineExpose({
 </div>
   <input ref="file-input-ref" type="file" accept="image/*" class="hidden" @change="onFileChange">
   <dialog ref="modal-ref" class="modal">
-    <div class="modal-box transition-none">
+    <div class="modal-box w-[calc(100vw-1rem)] max-w-md p-3 transition-none sm:p-6">
       <button @click="modalRef.close()" class="btn btn-circle btn-sm btn-ghost absolute right-2 top-2">×</button>
       <div ref="croppie-ref" class="flex flex-col justify-center my-4"></div>
       <div class="modal-action">

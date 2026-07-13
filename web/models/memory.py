@@ -74,3 +74,31 @@ class SemanticMemory(models.Model):
             models.Index(fields=["friend", "is_active", "category"], name="sem_friend_active_cat"),
             models.Index(fields=["friend", "-confidence"], name="sem_friend_conf"),
         ]
+
+
+class MemoryEvidence(models.Model):
+    """可追溯证据：把长期事实关联回导入聊天或后续 AI 聊天。"""
+
+    SOURCE_TYPE_CHOICES = [
+        ("import_chat", "导入聊天"),
+        ("online_chat", "后续 AI 聊天"),
+        ("user_assertion", "用户手动维护"),
+    ]
+
+    memory = models.ForeignKey(
+        SemanticMemory, on_delete=models.CASCADE, related_name="evidences"
+    )
+    source_type = models.CharField(max_length=20, choices=SOURCE_TYPE_CHOICES)
+    # import_chat 保存 ChatMessage.msg_index；online_chat 保存 Message.id。
+    message_refs = models.JSONField(default=list, blank=True)
+    start_message_ref = models.IntegerField(null=True, blank=True)
+    end_message_ref = models.IntegerField(null=True, blank=True)
+    chat_day = models.DateField(null=True, blank=True)
+    excerpt = models.TextField(default="", blank=True)
+    created_at = models.DateTimeField(default=now)
+
+    class Meta:
+        db_table = "memory_evidence"
+        indexes = [
+            models.Index(fields=["memory", "source_type"], name="mem_evidence_source"),
+        ]

@@ -1,7 +1,9 @@
 """用户可查看和维护自己与角色之间的长期记忆。"""
 from fastapi import APIRouter, Depends
 
-from ai.memory.semantic import _index_fact, add_fact, sync_friend_memory_cache
+from ai.memory.semantic import (
+    add_fact, add_memory_evidence, rebuild_semantic_index, sync_friend_memory_cache,
+)
 from api.deps import get_current_user
 from api.schemas import MemoryCreateRequest, MemoryUpdateRequest
 from web.models.friend import Friend
@@ -25,6 +27,16 @@ def _serialize(memory: SemanticMemory) -> dict:
         "is_mutable": memory.is_mutable,
         "valid_from": memory.valid_from,
         "valid_to": memory.valid_to,
+        "evidences": [
+            {
+                "id": evidence.id,
+                "source_type": evidence.source_type,
+                "message_refs": evidence.message_refs,
+                "chat_day": evidence.chat_day,
+                "excerpt": evidence.excerpt,
+            }
+            for evidence in memory.evidences.all()
+        ],
     }
 
 
@@ -33,7 +45,9 @@ def list_memories(friend_id: int, user=Depends(get_current_user)):
     friend = Friend.objects.filter(id=friend_id, me__user=user).first()
     if not friend:
         return {"result": "好友不存在", "memories": []}
-    memories = SemanticMemory.objects.filter(friend=friend, is_active=True).order_by(
+    memories = SemanticMemory.objects.filter(friend=friend, is_active=True).prefetch_related(
+        "evidences"
+    ).order_by(
         "subject", "category", "memory_state", "-confidence", "-id"
     )
     return {"result": "success", "memories": [_serialize(memory) for memory in memories]}
@@ -51,8 +65,15 @@ def create_memory(data: MemoryCreateRequest, user=Depends(get_current_user)):
     memory = add_fact(
         friend, data.fact.strip(), data.category, confidence=1.0,
         source="user", is_locked=True, is_mutable=False, subject=data.subject,
+        index=False,
+    )
+    add_memory_evidence(
+        memory,
+        source_type="user_assertion",
+        excerpt=data.fact.strip(),
     )
     sync_friend_memory_cache(friend)
+    rebuild_semantic_index(friend.id)
     return {"result": "success", "memory": _serialize(memory)}
 
 
@@ -75,8 +96,13 @@ def update_memory(memory_id: int, data: MemoryUpdateRequest, user=Depends(get_cu
     memory.save(update_fields=[
         "fact", "subject", "category", "source", "is_locked", "is_mutable", "updated_at",
     ])
-    _index_fact(memory.friend_id, memory.fact)
+    add_memory_evidence(
+        memory,
+        source_type="user_assertion",
+        excerpt=data.fact.strip(),
+    )
     sync_friend_memory_cache(memory.friend)
+    rebuild_semantic_index(memory.friend_id)
     return {"result": "success", "memory": _serialize(memory)}
 
 
@@ -88,4 +114,5 @@ def forget_memory(memory_id: int, user=Depends(get_current_user)):
     memory.is_active = False
     memory.save(update_fields=["is_active", "updated_at"])
     sync_friend_memory_cache(memory.friend)
+    rebuild_semantic_index(memory.friend_id)
     return {"result": "success"}

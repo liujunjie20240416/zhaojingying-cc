@@ -17,6 +17,15 @@ class RemoveCharacterRequest(BaseModel):
     character_id: int
 
 
+class ResumeImportRequest(BaseModel):
+    character_id: int
+
+
+class UpdateImportedMemoryVisibilityRequest(BaseModel):
+    character_id: int
+    visibility: str
+
+
 # ── Friend ──
 class GetOrCreateFriendRequest(BaseModel):
     character_id: int
@@ -29,7 +38,8 @@ class RemoveFriendRequest(BaseModel):
 # ── Chat ──
 class ChatRequest(BaseModel):
     friend_id: int
-    message: str
+    message: str = ""
+    attachment_ids: list[int] = Field(default_factory=list, max_length=4)
     emotion_context: list[dict[str, str]] = Field(default_factory=list)
 
 

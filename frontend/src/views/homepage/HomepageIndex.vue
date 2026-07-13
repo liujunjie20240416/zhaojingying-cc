@@ -87,7 +87,7 @@ onBeforeUnmount(()=>{
 
 <template>
   <div class="flex flex-col items-center mb-12">
-    <div class="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-9 mt-12 justify-items-center w-full px-9">
+    <div class="grid w-full grid-cols-1 justify-items-center gap-6 px-3 mt-6 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))] sm:gap-9 sm:px-9 sm:mt-12">
       <Character
           v-for="character in characters"
           :key="character.id"

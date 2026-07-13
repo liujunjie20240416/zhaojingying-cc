@@ -20,7 +20,7 @@ const character = ref(null)
 const voices=ref([])
 const curVoiceId = ref(null)
 
-onMounted(async ()=>{
+async function loadCharacter(){
   try{
     const res = await api.get('/api/create/character/get_single/',{
       params:{
@@ -34,9 +34,11 @@ onMounted(async ()=>{
       curVoiceId.value = data.character.voice_id
     }
   }catch(err){
-
+    errorMessage.value = '角色信息加载失败，请稍后重试'
   }
-})
+}
+
+onMounted(loadCharacter)
 
 const photoRef = useTemplateRef('photo-ref')
 const nameRef = useTemplateRef('name-ref')
@@ -96,12 +98,20 @@ async function handleUpdate(){
   }
 
 }
+
+async function handleImported(){
+  await loadCharacter()
+}
+
+function handleVisibilityChanged(value){
+  character.value.imported_memory_visibility = value
+}
 </script>
 
 <template>
-<div v-if="character" class="flex justify-center">
-  <div class="card w-120 bg-base-200 shadow-sm mt-16">
-    <div class="card-body">
+<div v-if="character" class="flex justify-center px-3 sm:px-6">
+  <div class="card w-full max-w-120 bg-base-200 shadow-sm mt-6 sm:mt-16">
+    <div class="card-body p-4 sm:p-8">
       <h3 class="text-lg font-bold my-4">更新角色</h3>
       <Photo ref="photo-ref" :photo="character.photo"/>
       <Name ref="name-ref" :name="character.name"/>
@@ -109,11 +119,27 @@ async function handleUpdate(){
       <Profile ref="profile-ref" :profile="character.profile"/>
       <BackgroundImage ref="background-image-ref" :backgroundImage="character.background_image"/>
 
-      <WechatImport :characterId="character.id" :characterName="character.name" />
+      <WechatImport
+        :characterId="character.id"
+        :characterName="character.name"
+        :memoryVisibility="character.imported_memory_visibility"
+        @imported="handleImported"
+        @visibilityChanged="handleVisibilityChanged"
+      />
+
+      <details v-if="character.style_profile" class="collapse collapse-arrow border border-base-300 bg-base-100">
+        <summary class="collapse-title text-sm font-semibold">AI 学习到的说话风格</summary>
+        <div class="collapse-content">
+          <p class="mb-2 text-xs text-base-content/60">
+            此内容只读，会在重新导入聊天记录后自动生成并用于 AI 回复。
+          </p>
+          <div class="whitespace-pre-wrap break-words rounded-lg bg-base-200 p-3 text-sm leading-6">{{ character.style_profile }}</div>
+        </div>
+      </details>
 
       <p v-if="errorMessage" class="text-sm text-red-500">{{errorMessage}}</p>
       <div class="flex justify-center">
-        <button @click="handleUpdate" class="btn btn-neutral w-60 mt-2">更新</button>
+        <button @click="handleUpdate" class="btn btn-neutral w-full max-w-60 mt-2">更新</button>
       </div>
     </div>
   </div>

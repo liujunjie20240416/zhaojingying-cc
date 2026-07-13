@@ -18,8 +18,9 @@ from zoneinfo import ZoneInfo
 from web.models.chat_message import ChatMessage
 
 TZ = ZoneInfo("Asia/Shanghai")
-MAX_PER_CHUNK = 500   # 单 Chunk 上限（微信消息短，一天的对话通常放得下）
-SESSION_GAP_HOURS = 4  # 日内二次切分的会话间隙
+MAX_MESSAGES_PER_ANALYSIS_CHUNK = 120
+MAX_CHARS_PER_ANALYSIS_CHUNK = 10000
+ANALYSIS_CHUNK_OVERLAP = 6
 
 
 def chunk_messages(character_id: int, api_key: str = "", api_base: str = "") -> list[dict]:
@@ -39,7 +40,7 @@ def chunk_messages(character_id: int, api_key: str = "", api_base: str = "") -> 
     # 从数据中计算一天的起点
     day_start_hour = _detect_day_start(msgs)
 
-    chunks: list[list[dict]] = [[msgs[0]]]
+    chat_days: list[list[dict]] = [[msgs[0]]]
     prev_dt = _parse_datetime(msgs[0].get("timestamp", ""))
 
     for msg in msgs[1:]:
@@ -50,21 +51,49 @@ def chunk_messages(character_id: int, api_key: str = "", api_base: str = "") -> 
             if _crosses_day(prev_dt, cur_dt, day_start_hour):
                 # 跨聊天日 → 新的一天
                 should_split = True
-            elif not _crosses_day(prev_dt, cur_dt, day_start_hour):
-                # 同一天内但间隙太大 → 不同的会话段落（只在消息过多时触发）
-                gap_h = (cur_dt - prev_dt).total_seconds() / 3600
-                if len(chunks[-1]) >= MAX_PER_CHUNK and gap_h > SESSION_GAP_HOURS:
-                    should_split = True
-
         if should_split:
-            chunks.append([msg])
+            chat_days.append([msg])
         else:
-            chunks[-1].append(msg)
+            chat_days[-1].append(msg)
 
         if cur_dt:
             prev_dt = cur_dt
 
-    return [_build_chunk(i, c) for i, c in enumerate(chunks)]
+    analysis_chunks: list[dict] = []
+    for day_messages in chat_days:
+        for part_index, part in enumerate(_split_analysis_chunks(day_messages)):
+            chunk = _build_chunk(len(analysis_chunks), part)
+            first_dt = _parse_datetime(day_messages[0].get("timestamp", ""))
+            chunk["chat_day"] = (
+                datetime.date.fromordinal(_chat_day_id(first_dt, day_start_hour)).isoformat()
+                if first_dt else chunk["time_start"]
+            )
+            chunk["part_index"] = part_index
+            analysis_chunks.append(chunk)
+    return analysis_chunks
+
+
+def _split_analysis_chunks(messages: list[dict]) -> list[list[dict]]:
+    """Split one chat day into bounded LLM chunks with a small continuity overlap."""
+    parts: list[list[dict]] = []
+    start = 0
+    while start < len(messages):
+        end = start
+        char_count = 0
+        while end < len(messages):
+            message_chars = len(str(messages[end].get("content", ""))) + 40
+            if end > start and (
+                end - start >= MAX_MESSAGES_PER_ANALYSIS_CHUNK
+                or char_count + message_chars > MAX_CHARS_PER_ANALYSIS_CHUNK
+            ):
+                break
+            char_count += message_chars
+            end += 1
+        parts.append(messages[start:end])
+        if end >= len(messages):
+            break
+        start = max(start + 1, end - ANALYSIS_CHUNK_OVERLAP)
+    return parts
 
 
 def _detect_day_start(msgs: list[dict]) -> int:

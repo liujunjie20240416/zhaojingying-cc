@@ -28,7 +28,7 @@ async function handleLogout(){
 
 <template>
 <div class="dropdown dropdown-end">
-  <div tabindex="0" role="button" class="avatar btn btn-circle w-8 h-8 mr-6">
+  <div tabindex="0" role="button" class="avatar btn btn-circle w-8 h-8 mx-1 sm:mr-2">
     <div class="w-8 rounded-full">
       <img :src="user.photo" alt="">
     </div>

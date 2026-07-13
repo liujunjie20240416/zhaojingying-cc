@@ -1,17 +1,21 @@
 # ai/memory/semantic.py
 import json
+import logging
 import os
 from pathlib import Path
+import uuid
 
 import lancedb
 from django.utils.timezone import now
 from langchain_community.vectorstores import LanceDB
 
 from ai.custom_embeddings import CustomEmbeddings
+from ai.rag.scoring import lance_distance_to_relevance
 from web.models.friend import Friend
-from web.models.memory import SemanticMemory
+from web.models.memory import MemoryEvidence, SemanticMemory
 
 _STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "documents" / "lancedb_storage")
+logger = logging.getLogger(__name__)
 
 
 SUBJECT_LABELS = {
@@ -30,6 +34,11 @@ CATEGORY_LABELS = {
 VALID_SUBJECTS = set(SUBJECT_LABELS)
 VALID_CATEGORIES = set(CATEGORY_LABELS)
 VALID_MEMORY_STATES = {"current", "historical", "superseded"}
+
+
+def _table_names(db) -> set[str]:
+    listing = db.list_tables()
+    return set(getattr(listing, "tables", listing))
 
 
 def default_mutability(subject: str, category: str, source: str = "ai") -> bool:
@@ -76,13 +85,107 @@ def get_active_facts(
     ]
 
 
-def _index_fact(friend_id: int, fact: str):
+def _index_fact(friend_id: int, fact: str, memory_id: int | None = None):
     table_name = f"semantic_{friend_id}"
     try:
         db = lancedb.connect(_STORAGE_DIR)
-        LanceDB.from_texts([fact], CustomEmbeddings(), connection=db, table_name=table_name, mode="append")
+        LanceDB.from_texts(
+            [fact], CustomEmbeddings(),
+            metadatas=[{"memory_id": str(memory_id)}] if memory_id is not None else None,
+            connection=db, table_name=table_name, mode="append",
+        )
     except Exception:
-        pass
+        logger.exception("Failed to append SemanticMemory %s to %s", memory_id, table_name)
+
+
+def rebuild_semantic_index(friend_id: int) -> bool:
+    """Safely rebuild the vector projection from active SQLite facts.
+
+    SQLite remains authoritative. A failed embedding/build keeps the previous
+    LanceDB table available and returns False instead of silently deleting it.
+    """
+    table_name = f"semantic_{friend_id}"
+    temp_name = f"{table_name}__rebuild_{uuid.uuid4().hex[:10]}"
+    memories = list(SemanticMemory.objects.filter(
+        friend_id=friend_id, is_active=True
+    ).order_by("id").values("id", "fact"))
+    db = None
+    try:
+        db = lancedb.connect(_STORAGE_DIR)
+        table_names = _table_names(db)
+        if not memories:
+            if table_name in table_names:
+                db.drop_table(table_name)
+            return True
+        LanceDB.from_texts(
+            [memory["fact"] for memory in memories], CustomEmbeddings(),
+            metadatas=[{"memory_id": str(memory["id"])} for memory in memories],
+            connection=db, table_name=temp_name,
+        )
+        temp_table = db.open_table(temp_name)
+        if temp_table.count_rows() != len(memories):
+            raise RuntimeError("Semantic index row count mismatch")
+        # LanceDB OSS does not implement rename_table. Build and validate the
+        # full projection under a temporary name first, then replace the live
+        # table from the already-embedded Arrow data in one local operation.
+        db.create_table(table_name, data=temp_table.to_arrow(), mode="overwrite")
+        if db.open_table(table_name).count_rows() != len(memories):
+            raise RuntimeError("Live semantic index row count mismatch")
+        db.drop_table(temp_name)
+        return True
+    except Exception:
+        if db is not None:
+            try:
+                if temp_name in _table_names(db):
+                    db.drop_table(temp_name)
+            except Exception:
+                logger.exception("Failed to clean temporary semantic index %s", temp_name)
+        logger.exception("Failed to rebuild semantic index %s; previous index retained", table_name)
+        return False
+
+
+def add_memory_evidence(
+    memory: SemanticMemory,
+    *,
+    source_type: str,
+    message_refs: list[int] | None = None,
+    excerpt: str = "",
+    chat_day=None,
+) -> MemoryEvidence:
+    """Attach normalized, deduplicated provenance to a semantic fact."""
+    refs = sorted({int(ref) for ref in (message_refs or []) if str(ref).isdigit()})
+    start_ref = refs[0] if refs else None
+    end_ref = refs[-1] if refs else None
+    existing = MemoryEvidence.objects.filter(
+        memory=memory,
+        source_type=source_type,
+        start_message_ref=start_ref,
+        end_message_ref=end_ref,
+    ).first()
+    if existing:
+        merged_refs = sorted(set(existing.message_refs or []) | set(refs))
+        changed = []
+        if merged_refs != existing.message_refs:
+            existing.message_refs = merged_refs
+            changed.append("message_refs")
+        if excerpt and not existing.excerpt:
+            existing.excerpt = excerpt[:2000]
+            changed.append("excerpt")
+        if chat_day and not existing.chat_day:
+            existing.chat_day = chat_day
+            changed.append("chat_day")
+        if changed:
+            existing.save(update_fields=changed)
+        return existing
+    return MemoryEvidence.objects.create(
+        memory=memory,
+        source_type=source_type,
+        message_refs=refs,
+        start_message_ref=start_ref,
+        end_message_ref=end_ref,
+        excerpt=excerpt[:2000],
+        chat_day=chat_day,
+    )
 
 
 def add_fact(
@@ -98,6 +201,7 @@ def add_fact(
     memory_state: str = "current",
     valid_from=None,
     valid_to=None,
+    index: bool = True,
 ):
     """添加新事实，同时向量化到 LanceDB"""
     subject = _normalize_subject(subject)
@@ -116,7 +220,8 @@ def add_fact(
         is_locked=is_locked, is_mutable=is_mutable,
         memory_state=memory_state, valid_from=valid_from, valid_to=valid_to,
     )
-    _index_fact(friend.id, fact)
+    if index:
+        _index_fact(friend.id, fact, sm.id)
     return sm
 
 
@@ -131,7 +236,7 @@ def resolve_conflict(friend_id: int, old_fact: str, new_fact: str):
             is_mutable=old_sm.is_mutable, is_locked=old_sm.is_locked,
             memory_state="current", valid_from=now(),
         )
-        _index_fact(friend_id, new_fact)
+        _index_fact(friend_id, new_fact, new_sm.id)
         return new_sm
     current_time = now()
     new_sm = SemanticMemory.objects.create(
@@ -147,11 +252,17 @@ def resolve_conflict(friend_id: int, old_fact: str, new_fact: str):
         old_sm.valid_to = current_time
         old_sm.replaced_by = new_sm
         old_sm.save(update_fields=["memory_state", "valid_to", "replaced_by", "updated_at"])
-    _index_fact(friend_id, new_fact)
+    _index_fact(friend_id, new_fact, new_sm.id)
     return new_sm
 
 
-def search_semantic(friend_id: int, query: str, top_k: int = 10) -> list[dict]:
+def search_semantic(
+    friend_id: int,
+    query: str,
+    top_k: int = 10,
+    *,
+    include_imported: bool = True,
+) -> list[dict]:
     """搜索 Semantic Memory — 关键词 + 语义双路检索。
 
     关键词匹配：jieba 分词后扫描 fact 字段，精确命中词条
@@ -178,7 +289,10 @@ def search_semantic(friend_id: int, query: str, top_k: int = 10) -> list[dict]:
             qs = SemanticMemory.objects.filter(
                 friend_id=friend_id, is_active=True,
                 fact__icontains=kw,
-            ).order_by("memory_state", "-confidence")[:5]
+            )
+            if not include_imported:
+                qs = qs.exclude(source="import")
+            qs = qs.order_by("memory_state", "-confidence")[:5]
             for sm in qs:
                 if sm.id not in results:
                     results[sm.id] = {
@@ -196,16 +310,26 @@ def search_semantic(friend_id: int, query: str, top_k: int = 10) -> list[dict]:
             vdb = LanceDB(connection=db, embedding=CustomEmbeddings(), table_name=table_name)
             docs = vdb.similarity_search_with_score(query, k=top_k)
             for doc, score in docs:
-                sm = SemanticMemory.objects.filter(
+                memory_id = (doc.metadata or {}).get("memory_id")
+                sm_query = SemanticMemory.objects.filter(
+                    id=memory_id, friend_id=friend_id, is_active=True
+                ).first() if memory_id else SemanticMemory.objects.filter(
                     friend_id=friend_id, fact=doc.page_content, is_active=True
                 ).first()
+                sm = sm_query
+                if sm and not include_imported and sm.source == "import":
+                    sm = None
                 if sm and sm.id not in results:
                     results[sm.id] = {
                         "id": sm.id, "fact": sm.fact, "category": sm.category,
                         "confidence": sm.confidence, "source": "semantic",
                         "subject": sm.subject, "is_locked": sm.is_locked,
                         "is_mutable": sm.is_mutable, "memory_state": sm.memory_state,
-                        "score": float(score) if sm.memory_state == "current" else float(score) * 0.6,
+                        "score": (
+                            lance_distance_to_relevance(score)
+                            if sm.memory_state == "current"
+                            else lance_distance_to_relevance(score) * 0.6
+                        ),
                     }
     except Exception:
         pass

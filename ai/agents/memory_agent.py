@@ -1,19 +1,23 @@
-"""Memory Agent — 检索 Semantic Memory + Chat History + ImportAnalysis，组织上下文注入给 Conversation Agent。
+"""Memory Agent — 检索 Semantic Memory + Conversation History + ImportAnalysis。
 
 三轮检索：
   1. 时间匹配: 用户提到时间段 → 匹配 TimeChunk → 锁定 msg_index 范围
-  2. 范围内混合检索: FTS5 + LanceDB 在时间范围内搜索
+  2. 统一原文检索: Imported Chat + Online Chat，经各自 Adapter 搜索后合并
   3. 话题路由: 用户提到话题 → 查 TopicTag → 补充相关消息
 """
 import json
 import re
 
-from ai.rag.retriever import HybridRetriever
 from ai.rag.reranker import Reranker
+from ai.rag.query_rewriter import QueryRewriter
+from ai.rag.compressor import ContextCompressor
 from ai.memory.intent import detect_memory_intent
+from ai.memory.history_search import ConversationHistorySearch
+from ai.memory.import_access import can_access_imported_context
 from ai.memory.semantic import search_semantic
 from ai.tracing import record_trace
 from web.models.chat_message import ChatMessage
+from web.models.friend import Friend, Message
 from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
 
 
@@ -120,66 +124,6 @@ def _load_chat_messages_by_indices(character_id: int, msg_indices: list[int], li
     ]
 
 
-def _build_context_snippets(
-    character_id: int,
-    matched_ids: set[int],
-    chat_sender_name: str,
-    char_name: str,
-    context_window: int = 5,
-    time_scope: tuple | None = None,
-) -> list[str]:
-    """根据匹配的 ChatMessage rowid 拉取上下文窗口，拼接成对话片段。
-
-    如果提供了 time_scope (start, end)，只在范围内检索。
-    """
-    if not matched_ids or not chat_sender_name:
-        return []
-
-    msg_indices: set[int] = set()
-    base_qs = ChatMessage.objects.filter(character_id=character_id)
-    if time_scope:
-        base_qs = base_qs.filter(msg_index__gte=time_scope[0], msg_index__lte=time_scope[1])
-
-    for cm in base_qs.filter(id__in=matched_ids).values("msg_index"):
-        msg_indices.add(cm["msg_index"])
-
-    all_indices: set[int] = set()
-    for mi in msg_indices:
-        for offset in range(-context_window, context_window + 1):
-            all_indices.add(mi + offset)
-
-    qs = ChatMessage.objects.filter(character_id=character_id)
-    if time_scope:
-        qs = qs.filter(msg_index__gte=time_scope[0], msg_index__lte=time_scope[1])
-    context_msgs = list(qs.filter(msg_index__in=all_indices).order_by("msg_index")[:200])
-    context_msgs.sort(key=lambda m: m.msg_index)
-
-    snippets: list[list] = []
-    current_snippet: list = []
-    last_idx: int | None = None
-    for m in context_msgs:
-        if last_idx is not None and m.msg_index - last_idx > context_window * 2:
-            if current_snippet:
-                snippets.append(current_snippet)
-            current_snippet = [m]
-        else:
-            current_snippet.append(m)
-        last_idx = m.msg_index
-    if current_snippet:
-        snippets.append(current_snippet)
-
-    result: list[str] = []
-    for snippet in snippets[:3]:
-        lines = []
-        for m in snippet:
-            if m.sender == chat_sender_name:
-                lines.append(f"[{m.timestamp}] {char_name}：{m.content}")
-            else:
-                lines.append(f"[{m.timestamp}] 对方：{m.content}")
-        result.append("\n".join(lines))
-    return result
-
-
 def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
     """Memory Agent — 三轮检索：时间匹配 → 混合检索 → 话题路由"""
     user_msg = ""
@@ -191,17 +135,49 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
     if not user_msg:
         return {"memory_context": "", "semantic_facts": state.get("semantic_facts", [])}
 
-    retriever = HybridRetriever(api_key, api_base)
+    history_search = ConversationHistorySearch(api_key, api_base)
     reranker = Reranker(api_key, api_base)
     character_id = state.get("character_id")
     friend_id = state.get("friend_id", 0)
+    friend = Friend.objects.select_related("character").filter(id=friend_id).first()
+    imported_context_allowed = bool(friend and can_access_imported_context(friend))
     memory_intent = detect_memory_intent(user_msg)
+    should_search_raw = (
+        state.get("intent") == "recall" or memory_intent.get("needs_raw_chat", False)
+    )
+    queries = [user_msg]
+    if state.get("intent") == "recall" and (
+        len(user_msg) <= 30 or any(word in user_msg for word in ("那次", "当时", "那件事", "她"))
+    ):
+        try:
+            queries = QueryRewriter(api_key, api_base).rewrite(user_msg)[:3]
+        except Exception:
+            queries = [user_msg]
 
     # 1. Search Semantic Memory
+    semantic_candidates: dict[int, dict] = {}
+    for query in queries:
+        for item in search_semantic(
+            friend_id,
+            query,
+            top_k=12,
+            include_imported=imported_context_allowed,
+        ):
+            semantic_candidates.setdefault(item["id"], item)
     semantic_results = _rank_semantic_results(
-        search_semantic(friend_id, user_msg, top_k=20),
+        list(semantic_candidates.values()),
         memory_intent,
-    )[:10]
+    )[:8]
+    target_subject = memory_intent.get("target_subject", "mixed")
+    category_hint = memory_intent.get("category_hint", "any")
+    semantic_reliable = any(
+        item.get("memory_state", "current") == "current"
+        and (target_subject == "mixed" or item.get("subject") == target_subject)
+        and (category_hint == "any" or item.get("category") == category_hint)
+        for item in semantic_results[:5]
+    )
+    if state.get("intent") == "memory" and not semantic_reliable:
+        should_search_raw = True
     semantic_facts = [r["fact"] for r in semantic_results]
     user_facts = [r["fact"] for r in semantic_results if r.get("subject", "user") == "user"]
     girlfriend_facts = [r["fact"] for r in semantic_results if r.get("subject") == "girlfriend"]
@@ -215,7 +191,11 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
     ]
 
     # ── 第 1 轮：时间匹配 ──
-    time_chunk = _search_time_chunks(character_id, user_msg) if character_id else None
+    time_chunk = (
+        _search_time_chunks(character_id, user_msg)
+        if character_id and should_search_raw and imported_context_allowed
+        else None
+    )
     time_scope = None
     time_context = ""
     if time_chunk:
@@ -223,40 +203,44 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
         time_context = f"【时间段】{time_chunk['label']}: {time_chunk['summary']}\n"
 
     # ── 第 2 轮：混合检索（有 time_scope 则缩小范围） ──
-    wechat_context = ""
-    if character_id and ChatMessage.objects.filter(character_id=character_id).exists():
-        # FTS5 + LanceDB 混合检索
-        candidates = retriever.hybrid_search(user_msg, character_id, top_k=30, use_hyde=False)
-
-        # 如果有 time_scope，过滤不在范围内的结果
-        if time_scope:
-            candidates = [
-                c for c in candidates
-                if not c.get("rowid") or _rowid_in_scope(c["rowid"], character_id, time_scope)
-            ]
-
-        candidates = reranker.rerank(user_msg, candidates, top_k=10)
-
-        matched_ids: set[int] = set()
-        for c in candidates:
-            rowid = c.get("rowid")
-            if rowid:
-                matched_ids.add(int(rowid))
-
-        if matched_ids:
-            char_name = state.get("character_name", "")
-            chat_sender_name = state.get("chat_sender_name", "")
-            snippets = _build_context_snippets(
-                character_id, matched_ids, chat_sender_name, char_name,
-                time_scope=time_scope,
-            )
-            wechat_context = "\n---\n".join(snippets[:5]) if snippets else ""
-
-        if not wechat_context and candidates:
-            wechat_context = "\n".join(c["content"][:400] for c in candidates[:3])
+    history_context = ""
+    history_hits: list[dict] = []
+    has_imported = bool(
+        imported_context_allowed
+        and character_id
+        and ChatMessage.objects.filter(character_id=character_id).exists()
+    )
+    has_online = bool(friend_id and Message.objects.filter(friend_id=friend_id).exists())
+    if should_search_raw and (has_imported or has_online):
+        candidates = history_search.search(
+            queries,
+            friend_id=friend_id,
+            character_id=character_id if imported_context_allowed else None,
+            imported_time_scope=time_scope,
+            top_k=30,
+        )
+        history_hits = reranker.rerank(user_msg, candidates, top_k=8)
+        history_parts = []
+        for hit in history_hits[:5]:
+            label = "导入聊天" if hit.get("source_type") == "import_chat" else "后续AI聊天"
+            history_parts.append(f"【{label}】\n{hit.get('content', '')[:1200]}")
+        history_context = "\n---\n".join(history_parts)
+        if len(history_context) > 3000 and not any(
+            signal in user_msg for signal in ("原话", "怎么说", "说了什么", "逐字")
+        ):
+            try:
+                history_context = ContextCompressor(api_key, api_base).compress(
+                    history_context, max_length=1000
+                )
+            except Exception:
+                history_context = history_context[:3000]
 
     # ── 第 3 轮：话题路由 ──
-    topic_indices = _search_topic_tags(character_id, user_msg) if character_id else []
+    topic_indices = (
+        _search_topic_tags(character_id, user_msg)
+        if character_id and should_search_raw and imported_context_allowed
+        else []
+    )
     topic_messages = ""
     if topic_indices:
         topic_msgs = _load_chat_messages_by_indices(character_id, topic_indices, limit=20)
@@ -281,15 +265,19 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
         parts.append("【共同经历】\n" + "\n".join(f"- {f}" for f in relationship_experiences))
     if relationship_patterns:
         parts.append("【关系互动规律】\n" + "\n".join(f"- {f}" for f in relationship_patterns))
-    if wechat_context:
-        parts.append("【相关聊天记录】\n" + wechat_context)
+    if history_context:
+        parts.append("【相关聊天原文】\n" + history_context)
     if topic_messages:
         parts.append(topic_messages)
 
     context = "\n\n".join(parts)
 
     # 注入关系演变概览（宏观）
-    if character_id:
+    needs_relationship_overview = (
+        memory_intent.get("target_subject") == "relationship"
+        or memory_intent.get("category_hint") == "relationship"
+    )
+    if character_id and needs_relationship_overview and imported_context_allowed:
         analysis = ImportAnalysis.objects.filter(character_id=character_id, status="done").first()
         if analysis and analysis.relationship_overview:
             overview_parts = [analysis.relationship_overview]
@@ -309,10 +297,15 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
             "friend_id": friend_id,
             "character_id": character_id,
             "memory_intent": memory_intent,
+            "should_search_raw": should_search_raw,
+            "semantic_reliable": semantic_reliable,
+            "imported_context_allowed": imported_context_allowed,
+            "queries": queries,
             "time_chunk": time_chunk,
             "time_scope": time_scope,
             "semantic_results": semantic_results,
-            "wechat_context": wechat_context,
+            "history_hits": history_hits,
+            "history_context": history_context,
             "topic_indices": topic_indices,
             "topic_messages": topic_messages,
         },
@@ -390,14 +383,3 @@ def _timeline_context_for_intent(analysis: ImportAnalysis, intent: dict) -> str:
             line += f"；状态：{state}"
         lines.append(line[:500])
     return "\n".join(lines)
-
-
-def _rowid_in_scope(rowid: int, character_id: int, time_scope: tuple) -> bool:
-    """检查 ChatMessage rowid 对应的 msg_index 是否在 time_scope 范围内"""
-    try:
-        cm = ChatMessage.objects.filter(character_id=character_id, id=rowid).values("msg_index").first()
-        if cm:
-            return time_scope[0] <= cm["msg_index"] <= time_scope[1]
-    except Exception:
-        pass
-    return True  # 查不到时就不过滤，宁可多返回

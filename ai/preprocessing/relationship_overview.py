@@ -5,11 +5,14 @@ Map 阶段已经把每个时间块压缩成摘要、关键事件和关系片段�
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 from ai.tracing import record_trace
+
+REDUCE_MAX_WORKERS = 3
 
 
 def _get_client(api_key: str = "", api_base: str = ""):
@@ -60,6 +63,7 @@ def _build_timeline_entries(chunk_results: list[dict], chunks: list[dict]) -> li
             if frag.get("fact", "").strip()
         ]
         entry = {
+            "chat_day": meta.get("chat_day") or meta.get("time_start", "")[:10],
             "time_start": meta.get("time_start", ""),
             "time_end": meta.get("time_end", ""),
             "start_msg_index": meta.get("start_msg_index", 0),
@@ -76,14 +80,147 @@ def _build_timeline_entries(chunk_results: list[dict], chunks: list[dict]) -> li
 
 
 def _do_analyze(entries: list[dict], target_name: str, api_key: str, api_base: str) -> dict:
+    """Month → year → global reduce so every analysis chunk participates."""
+    day_entries = _build_day_entries(entries, target_name, api_key, api_base)
+    month_entries = _build_month_entries(day_entries, target_name, api_key, api_base)
+    if len(month_entries) <= 12:
+        result = _do_analyze_direct(month_entries, target_name, api_key, api_base)
+        result["day_summaries"] = {entry["chat_day"]: entry for entry in day_entries}
+        return result
+
+    years: dict[str, list[dict]] = {}
+    for entry in month_entries:
+        years.setdefault(entry["time_start"][:4] or "unknown", []).append(entry)
+    year_entries: list[dict] = []
+    for year, items in sorted(years.items()):
+        result = _do_analyze_direct(items, target_name, api_key, api_base)
+        timeline = result.get("timeline", {})
+        year_entries.append({
+            "time_start": year,
+            "time_end": year,
+            "start_msg_index": items[0].get("start_msg_index", 0),
+            "end_msg_index": items[-1].get("end_msg_index", 0),
+            "summary": result.get("overview", ""),
+            "key_events": [event for stage in timeline.get("stages", []) for event in stage.get("key_events", [])][:20],
+            "relationship_facts": timeline.get("repair_patterns", []) + timeline.get("sensitive_points", []),
+            "topics": [],
+        })
+    result = _do_analyze_direct(year_entries, target_name, api_key, api_base)
+    result["day_summaries"] = {entry["chat_day"]: entry for entry in day_entries}
+    return result
+
+
+def _build_day_entries(
+    entries: list[dict], target_name: str, api_key: str, api_base: str
+) -> list[dict]:
+    groups: dict[str, list[dict]] = {}
+    for entry in entries:
+        groups.setdefault(entry.get("chat_day") or entry.get("time_start", "")[:10], []).append(entry)
+    reduced_by_day = {
+        day: _aggregate_period_entry(day, items)
+        for day, items in groups.items()
+        if len(items) == 1
+    }
+    busy_days = [(day, items) for day, items in groups.items() if len(items) > 1]
+    if busy_days:
+        with ThreadPoolExecutor(max_workers=min(REDUCE_MAX_WORKERS, len(busy_days))) as executor:
+            futures = {
+                executor.submit(
+                    _reduce_period_entry, day, items, target_name, api_key, api_base
+                ): day
+                for day, items in busy_days
+            }
+            for future in as_completed(futures):
+                reduced_by_day[futures[future]] = future.result()
+    result = []
+    for day in sorted(groups):
+        reduced = reduced_by_day[day]
+        reduced["chat_day"] = day
+        result.append(reduced)
+    return result
+
+
+def _build_month_entries(
+    entries: list[dict], target_name: str, api_key: str, api_base: str
+) -> list[dict]:
+    groups: dict[str, list[dict]] = {}
+    for entry in entries:
+        month = str(entry.get("time_start", ""))[:7] or "unknown"
+        groups.setdefault(month, []).append(entry)
+    reduced_by_month = {}
+    busy_months = []
+    for month, items in groups.items():
+        serialized_length = len(json.dumps(items, ensure_ascii=False))
+        if len(items) > 10 or serialized_length > 12000:
+            busy_months.append((month, items))
+        else:
+            reduced_by_month[month] = _aggregate_period_entry(month, items)
+    if busy_months:
+        with ThreadPoolExecutor(max_workers=min(REDUCE_MAX_WORKERS, len(busy_months))) as executor:
+            futures = {
+                executor.submit(
+                    _reduce_period_entry, month, items, target_name, api_key, api_base
+                ): month
+                for month, items in busy_months
+            }
+            for future in as_completed(futures):
+                reduced_by_month[futures[future]] = future.result()
+    return [reduced_by_month[month] for month in sorted(groups)]
+
+
+def _aggregate_period_entry(label: str, items: list[dict]) -> dict:
+    return {
+        "time_start": label,
+        "time_end": label,
+        "start_msg_index": min(item.get("start_msg_index", 0) for item in items),
+        "end_msg_index": max(item.get("end_msg_index", 0) for item in items),
+        "summary": "；".join(item.get("summary", "") for item in items if item.get("summary")),
+        "key_events": list(dict.fromkeys(event for item in items for event in item.get("key_events", []))),
+        "relationship_facts": list(dict.fromkeys(fact for item in items for fact in item.get("relationship_facts", []))),
+        "topics": list(dict.fromkeys(topic for item in items for topic in item.get("topics", []))),
+    }
+
+
+def _reduce_period_entry(
+    label: str, items: list[dict], target_name: str, api_key: str, api_base: str
+) -> dict:
+    """LLM-reduce a busy day/month without dropping later sub-chunks."""
     client = _get_client(api_key, api_base)
-    compact = json.dumps(entries[:160], ensure_ascii=False)
+    compact = json.dumps(items, ensure_ascii=False)
+    prompt = f"""将「{target_name}」和用户在 {label} 的以下局部聊天分析合并成一个时间段摘要。
+
+局部分析：{compact}
+
+输出纯 JSON：
+{{"summary":"完整但精炼的时间段摘要", "key_events":[], "relationship_facts":[], "topics":[]}}
+
+要求：合并重复内容；保留时间、人物、地点、约定、冲突和关系变化；不得编造；不要因为内容多而只保留开头。"""
+    try:
+        response = client.chat.completions.create(
+            model=llm_model(), messages=[{"role": "user", "content": prompt}],
+            temperature=0.1, max_tokens=3000, response_format={"type": "json_object"},
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+        parsed = json.loads((response.choices[0].message.content or "{}").strip())
+        aggregate = _aggregate_period_entry(label, items)
+        aggregate["summary"] = str(parsed.get("summary", aggregate["summary"]))[:2000]
+        aggregate["key_events"] = _ensure_list(parsed.get("key_events"))[:30]
+        aggregate["relationship_facts"] = _ensure_list(parsed.get("relationship_facts"))[:30]
+        aggregate["topics"] = _ensure_list(parsed.get("topics"))[:20]
+        return aggregate
+    except Exception:
+        return _aggregate_period_entry(label, items)
+
+
+def _do_analyze_direct(entries: list[dict], target_name: str, api_key: str, api_base: str) -> dict:
+    client = _get_client(api_key, api_base)
+    compact = json.dumps(entries, ensure_ascii=False)
     prompt = f"""你在为一个虚拟女友项目总结过去聊天记录中的关系演变。
 
 已知「{target_name}」是女友/角色。下面是按时间顺序压缩后的聊天时间块，每块包含摘要、关键事件、关系事实和话题。
 
 时间块 JSON：
-{compact[:20000]}
+{compact}
 
 请输出纯 JSON，不要 markdown：
 {{
@@ -118,7 +255,7 @@ def _do_analyze(entries: list[dict], target_name: str, api_key: str, api_base: s
     trace_inputs = {
         "model": llm_model(),
         "target_name": target_name,
-        "entries": entries[:160],
+        "entries": entries,
         "messages": [{"role": "user", "content": prompt}],
     }
     record_trace(
@@ -132,6 +269,7 @@ def _do_analyze(entries: list[dict], target_name: str, api_key: str, api_base: s
         temperature=0.1,
         max_tokens=8000,
         response_format={"type": "json_object"},
+        extra_body={"thinking": {"type": "disabled"}},
     )
     message = resp.choices[0].message
     content = (message.content or "").strip()

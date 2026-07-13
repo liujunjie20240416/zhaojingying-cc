@@ -1,5 +1,5 @@
 <script setup>
-import {computed, nextTick, ref, useTemplateRef} from "vue";
+import {computed, nextTick, onUnmounted, ref, useTemplateRef} from "vue";
 import InputField from "@/components/character/chat_field/input_field/InputField.vue";
 import CharacterPhotoField from "@/components/character/chat_field/character_photo_field/CharacterPhotoField.vue";
 import ChatHistory from "@/components/character/chat_field/chat_history/ChatHistory.vue";
@@ -19,6 +19,29 @@ const isTyping = computed(() => {
   const lastMessage = history.value.at(-1)
   return Boolean(lastMessage?.role === 'ai' && lastMessage?.isTyping)
 })
+let bubbleTimers = []
+let pendingBubbleState = null
+
+function clearBubbleTimers() {
+  bubbleTimers.forEach(timer => window.clearTimeout(timer))
+  bubbleTimers = []
+}
+
+function flushPendingBubbles() {
+  if (!pendingBubbleState) return
+  clearBubbleTimers()
+  const {message, bubbles} = pendingBubbleState
+  message.bubbles = [...bubbles]
+  message.content = bubbles.join('\n')
+  message.isTyping = false
+  pendingBubbleState = null
+}
+
+function bubbleDelay(previousBubble) {
+  // Short replies feel like separate IM messages without making a longer
+  // response painfully slow. Delay is measured before the next bubble.
+  return Math.min(2000, 700 + String(previousBubble || '').length * 28)
+}
 
 async function showModal() {
   modalRef.value.showModal()
@@ -40,6 +63,7 @@ const modalStyle = computed(() => {
 })
 
 function handlePushBackMessage(msg){
+  flushPendingBubbles()
   history.value.push(msg)
   chatHistoryRef.value.scrollToBottom()
 }
@@ -47,6 +71,43 @@ function handleAddToLastMessage(delta){
   const lastMessage = history.value.at(-1)
   lastMessage.isTyping = false
   lastMessage.content += delta
+  isOnline.value = true
+  chatHistoryRef.value.scrollToBottom()
+}
+function handleSetLastMessageBubbles(bubbles){
+  const lastMessage = history.value.at(-1)
+  if (!lastMessage || lastMessage.role !== 'ai') return
+  flushPendingBubbles()
+  const normalized = Array.isArray(bubbles)
+    ? bubbles.map(item => String(item).trim()).filter(Boolean)
+    : []
+  if (!normalized.length) {
+    lastMessage.isTyping = false
+    return
+  }
+
+  lastMessage.bubbles = [normalized[0]]
+  lastMessage.content = normalized[0]
+  lastMessage.isTyping = normalized.length > 1
+  if (normalized.length > 1) {
+    pendingBubbleState = {message: lastMessage, bubbles: normalized}
+    let elapsed = 0
+    for (let index = 1; index < normalized.length; index += 1) {
+      elapsed += bubbleDelay(normalized[index - 1])
+      const timer = window.setTimeout(() => {
+        if (pendingBubbleState?.message !== lastMessage) return
+        lastMessage.bubbles.push(normalized[index])
+        lastMessage.content = lastMessage.bubbles.join('\n')
+        lastMessage.isTyping = index < normalized.length - 1
+        chatHistoryRef.value?.scrollToBottom()
+        if (index === normalized.length - 1) {
+          pendingBubbleState = null
+          bubbleTimers = []
+        }
+      }, elapsed)
+      bubbleTimers.push(timer)
+    }
+  }
   isOnline.value = true
   chatHistoryRef.value.scrollToBottom()
 }
@@ -62,7 +123,7 @@ function handleConnectionError() {
 }
 function handleTypingFinished() {
   const lastMessage = history.value.at(-1)
-  if (lastMessage?.role === 'ai') {
+  if (lastMessage?.role === 'ai' && pendingBubbleState?.message !== lastMessage) {
     lastMessage.isTyping = false
   }
 }
@@ -82,6 +143,8 @@ async function handleClearHistory() {
       friend_id: props.friend.id,
     })
     if (res.data.result === 'success') {
+      clearBubbleTimers()
+      pendingBubbleState = null
       history.value = []
       clearing.value = false
     }
@@ -90,6 +153,8 @@ async function handleClearHistory() {
   }
 }
 
+onUnmounted(clearBubbleTimers)
+
 defineExpose({
   showModal,
 })
@@ -97,7 +162,7 @@ defineExpose({
 
 <template>
   <dialog ref="modal-ref" class="modal" @close="handleClose">
-    <div class="modal-box w-90 h-150" :style="modalStyle">
+    <div class="modal-box chat-modal-box" :style="modalStyle">
       <div class="chat-top-bar">
         <div v-if="friend" class="chat-status-bar">
           <div class="status-avatar">
@@ -137,6 +202,7 @@ defineExpose({
           :friendId=friend.id
           @pushBackMessage="handlePushBackMessage"
           @addToLastMessage="handleAddToLastMessage"
+          @setLastMessageBubbles="handleSetLastMessageBubbles"
           @connectionOnline="handleConnectionOnline"
           @connectionError="handleConnectionError"
           @typingFinished="handleTypingFinished"
@@ -164,6 +230,15 @@ defineExpose({
   color: white;
   backdrop-filter: blur(12px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.chat-modal-box {
+  width: min(100vw, 360px);
+  max-width: none;
+  height: min(100dvh, 600px);
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
 }
 
 .chat-status-bar {
@@ -293,6 +368,23 @@ defineExpose({
   50% {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@media (max-width: 639px) {
+  .chat-modal-box {
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
+  }
+
+  .chat-status-bar {
+    width: auto;
+    flex: 1 1 auto;
+  }
+
+  .typing-indicator {
+    display: none;
   }
 }
 

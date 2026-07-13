@@ -1,11 +1,18 @@
 # ai/agents/supervisor.py
-"""Supervisor 路由 — 基于关键词匹配，零 API 调用延迟。"""
+"""Supervisor routing: deterministic fast paths plus LLM fallback."""
 
+import json
+
+from openai import OpenAI
+
+from ai.config import llm_api_base, llm_api_key, llm_model
 from ai.tracing import record_trace
 
 
 INTENT_ROUTE_MAP = {
     "chat": "conversation",
+    "time": "conversation",
+    "memory": "memory",
     "recall": "memory",
     "emotional": "emotion",
 }
@@ -15,10 +22,21 @@ RECALL_SIGNALS = [
     "说过", "聊过", "提过", "回忆", "往事",
 ]
 
+TIME_SIGNALS = ["几点", "什么时候了", "现在时间", "今天几号", "星期几", "周几"]
+MEMORY_SIGNALS = [
+    "我喜欢什么", "我讨厌什么", "我的生日", "我叫什么", "你喜欢什么",
+    "你的生日", "我们是什么关系", "怎么哄", "怎么安慰", "我的习惯",
+]
+
 EMOTIONAL_SIGNALS = [
     "难过", "伤心", "哭", "崩溃", "绝望", "害怕", "焦虑",
     "开心死", "激动", "太棒", "兴奋", "生气", "愤怒", "烦",
     "累死", "压力", "撑不住", "好累", "想哭",
+]
+
+AMBIGUOUS_SIGNALS = [
+    "算了", "没事", "呵呵", "随便", "你忙吧", "当我没说", "一言难尽",
+    "那个", "当时", "她", "我们", "是不是", "为什么", "怎么",
 ]
 
 
@@ -45,12 +63,62 @@ def supervisor_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
             record_trace("supervisor.route", {"user_msg": user_msg}, result)
             return result
 
+    for signal in TIME_SIGNALS:
+        if signal in user_msg:
+            result = {"intent": "time", "delegate_to": "conversation", "matched_signal": signal}
+            record_trace("supervisor.route", {"user_msg": user_msg}, result)
+            return result
+
     for signal in RECALL_SIGNALS:
         if signal in user_msg:
             result = {"intent": "recall", "delegate_to": "memory", "matched_signal": signal}
             record_trace("supervisor.route", {"user_msg": user_msg}, result)
             return result
 
-    result = {"intent": "chat", "delegate_to": "memory"}
+    for signal in MEMORY_SIGNALS:
+        if signal in user_msg:
+            result = {"intent": "memory", "delegate_to": "memory", "matched_signal": signal}
+            record_trace("supervisor.route", {"user_msg": user_msg}, result)
+            return result
+
+    emotion_context = state.get("emotion_context") or []
+    if emotion_context or any(signal in user_msg for signal in AMBIGUOUS_SIGNALS):
+        result = _classify_with_llm(user_msg, emotion_context, api_key, api_base)
+        record_trace("supervisor.route", {"user_msg": user_msg, "emotion_context": emotion_context}, result)
+        return result
+
+    result = {"intent": "chat", "delegate_to": "conversation"}
     record_trace("supervisor.route", {"user_msg": user_msg}, result)
     return result
+
+
+def _classify_with_llm(user_msg: str, emotion_context: list, api_key: str, api_base: str) -> dict:
+    """Classify only ambiguous text/emoji; failures safely fall back to chat."""
+    try:
+        client = OpenAI(
+            api_key=api_key or llm_api_key(), base_url=api_base or llm_api_base(), timeout=20
+        )
+        prompt = f"""判断这句伴侣聊天的意图，只输出 JSON。
+用户消息：{user_msg}
+前端识别到的 emoji 含义：{json.dumps(emotion_context, ensure_ascii=False)}
+
+{{"intent":"chat|time|memory|recall|emotional","confidence":0.0,"emotion_intensity":0}}
+
+recall=询问过去具体事件/原话；memory=询问稳定身份偏好关系；emotional=需要明显情绪回应；普通陪伴对话用chat。"""
+        response = client.chat.completions.create(
+            model=llm_model(), messages=[{"role": "user", "content": prompt}],
+            temperature=0, max_tokens=120, response_format={"type": "json_object"},
+        )
+        parsed = json.loads((response.choices[0].message.content or "{}").strip())
+        intent = parsed.get("intent", "chat")
+        if intent not in INTENT_ROUTE_MAP:
+            intent = "chat"
+        return {
+            "intent": intent,
+            "delegate_to": INTENT_ROUTE_MAP[intent],
+            "classification_source": "llm",
+            "classification_confidence": float(parsed.get("confidence", 0)),
+            "emotion_intensity_hint": int(parsed.get("emotion_intensity", 0)),
+        }
+    except Exception:
+        return {"intent": "chat", "delegate_to": "conversation", "classification_source": "fallback"}

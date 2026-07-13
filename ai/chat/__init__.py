@@ -1,0 +1,1 @@
+"""Chat response contracts."""

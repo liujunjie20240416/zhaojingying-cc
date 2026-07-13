@@ -33,3 +33,6 @@ dev = ["pytest>=8.0", "pytest-django>=4.9"]
 DJANGO_SETTINGS_MODULE = "django_settings"
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "llm_integration: requires RUN_LLM_INTEGRATION_TESTS=1 and a live GLM API",
+]

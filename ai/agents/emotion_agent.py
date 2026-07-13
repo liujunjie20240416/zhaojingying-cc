@@ -21,8 +21,11 @@ def emotion_agent_node(state: dict, api_key: str = "", api_base: str = "") -> di
             recent.append(msg.content)
 
     user_msg = recent[-1] if recent else ""
+    emoji_context = state.get("emotion_context") or []
+    emoji_text = "\n".join(str(item) for item in emoji_context[:8])
 
     prompt = f"""分析用户情绪。最近对话：{chr(10).join(recent[-4:])}
+前端提供的 emoji 语义提示（仅作为辅助，不是用户原话）：{emoji_text or '无'}
 输出纯JSON：
 {{"emotion": "sad|happy|angry|anxious|neutral|tired|excited", "intensity": 0-10,
   "suggested_tone": "gentle|cheerful|calm|encouraging|playful", "should_comfort": true/false}}"""
@@ -30,6 +33,7 @@ def emotion_agent_node(state: dict, api_key: str = "", api_base: str = "") -> di
     trace_inputs = {
         "model": llm_model(),
         "recent_messages": recent[-4:],
+        "emotion_context": emoji_context,
         "user_msg": user_msg,
         "messages": [{"role": "user", "content": prompt}],
     }

@@ -83,7 +83,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-<div class="absolute bottom-4 left-2 h-12 w-86 flex items-center bg-black/30 backdrop-blur-sm rounded-2xl">
+<div class="absolute bottom-4 left-2 right-2 h-12 flex items-center bg-black/30 backdrop-blur-sm rounded-2xl">
   <div v-if="isSpeaking" class="flex items-center justify-center gap-1 h-6 flex-1">
   <div
     v-for="i in 32" :key="i"

@@ -33,26 +33,26 @@ function handleSearch(){
   <input id="my-drawer-4" type="checkbox" class="drawer-toggle" />
   <div class="drawer-content">
     <!-- Navbar -->
-    <nav class="navbar w-full app-glass-bar">
-      <div class="navbar-start">
+    <nav class="navbar w-full flex-wrap gap-2 px-2 app-glass-bar sm:flex-nowrap sm:px-4">
+      <div class="navbar-start w-auto flex-1 sm:w-1/4 sm:flex-none">
         <label for="my-drawer-4" aria-label="open sidebar" class="btn btn-square btn-ghost">
         <!-- Sidebar toggle icon -->
         <MenuIcon/>
       </label>
-      <div class="px-2 font-bold text-xl" >AI Friends</div>
+      <div class="hidden px-2 font-bold text-xl min-[400px]:block" >AI Friends</div>
       </div>
-      <div class="navbar-center w-4/5 max-w-180 flex justify-center">
-        <form @submit.prevent="handleSearch" class="join w-4/5 flex justify-center">
-          <input v-model="searchQuery" class="input join-item rounded-l-full w-4/5" placeholder="搜索你感兴趣的内容" />
-          <button class="btn join-item rounded-r-full gap-0">
-            <SearchIcon />搜索
+      <div class="navbar-center order-3 flex w-full max-w-180 justify-center sm:order-none sm:flex-1">
+        <form @submit.prevent="handleSearch" class="join flex w-full justify-center sm:w-4/5">
+          <input v-model="searchQuery" class="input join-item min-w-0 flex-1 rounded-l-full" placeholder="搜索角色" />
+          <button class="btn join-item rounded-r-full gap-1">
+            <SearchIcon /><span class="hidden md:inline">搜索</span>
           </button>
         </form>
 
       </div>
 
-      <div class="navbar-end ">
-        <RouterLink v-if="user.isLogin()" :to="{name:'create-index'}" active-class="btn-active" class="btn btn-ghost text-base mr-6"><CreateIcon />创作</RouterLink>
+      <div class="navbar-end w-auto">
+        <RouterLink v-if="user.isLogin()" :to="{name:'create-index'}" active-class="btn-active" class="btn btn-ghost px-2 text-base sm:px-4"><CreateIcon /><span class="hidden md:inline">创作</span></RouterLink>
       <RouterLink  v-if="user.hasPulledUserInfo && !user.isLogin()" :to="{name:'user-account-login-index'}" active-class="btn-active" class="btn btn-ghost text-lg">登录</RouterLink>
       <UserMenu  v-else-if="user.isLogin()"/>
       </div>

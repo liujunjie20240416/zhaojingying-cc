@@ -48,6 +48,7 @@ class TestMemoryAgent:
 
 
 class TestEmotionAgent:
+    @pytest.mark.llm_integration
     def test_detect_emotion(self, api_key, api_base):
         from ai.agents.emotion_agent import emotion_agent_node
         Msg = type("msg", (), {"content": "我今天好难过，工作好累"})
@@ -58,6 +59,7 @@ class TestEmotionAgent:
 
 
 class TestConversationAgent:
+    @pytest.mark.llm_integration
     def test_generates_response(self, api_key, api_base):
         from ai.agents.conversation_agent import conversation_agent_node
         from langchain_core.messages import HumanMessage
@@ -74,6 +76,7 @@ class TestConversationAgent:
 
 class TestSupervisorGraph:
     @pytest.mark.django_db
+    @pytest.mark.llm_integration
     def test_create_supervisor_app(self, api_key, api_base):
         from ai.agents.supervisor_graph import create_supervisor_app
         from langchain_core.messages import HumanMessage

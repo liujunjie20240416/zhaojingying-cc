@@ -3,6 +3,7 @@ from ai.rag.query_rewriter import QueryRewriter
 
 
 class TestQueryRewriter:
+    @pytest.mark.llm_integration
     def test_rewrite_vague_query(self, api_key, api_base):
         rewriter = QueryRewriter(api_key=api_key, api_base=api_base)
         result = rewriter.rewrite("上次那个事")
@@ -11,6 +12,7 @@ class TestQueryRewriter:
         assert len(result) >= 2
         assert all(isinstance(q, str) and len(q) > 0 for q in result)
 
+    @pytest.mark.llm_integration
     def test_rewrite_specific_query(self, api_key, api_base):
         rewriter = QueryRewriter(api_key=api_key, api_base=api_base)
         result = rewriter.rewrite("我喜欢吃什么")
@@ -19,6 +21,7 @@ class TestQueryRewriter:
 
 
 class TestHyDE:
+    @pytest.mark.llm_integration
     def test_generate_hypothetical_doc(self, api_key, api_base):
         from ai.rag.hyde import HyDEGenerator
         gen = HyDEGenerator(api_key=api_key, api_base=api_base)
@@ -27,6 +30,7 @@ class TestHyDE:
         assert len(doc) > 20
         assert len(doc) < 500
 
+    @pytest.mark.llm_integration
     def test_generate_returns_chinese(self, api_key, api_base):
         from ai.rag.hyde import HyDEGenerator
         gen = HyDEGenerator(api_key=api_key, api_base=api_base)
@@ -97,6 +101,7 @@ class TestReranker:
 
 
 class TestCompressor:
+    @pytest.mark.llm_integration
     def test_compress_long_context(self, api_key, api_base):
         from ai.rag.compressor import ContextCompressor
         comp = ContextCompressor(api_key=api_key, api_base=api_base)

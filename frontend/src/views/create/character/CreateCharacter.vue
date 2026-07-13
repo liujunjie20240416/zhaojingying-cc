@@ -95,9 +95,9 @@ async function handleFinish(){
 </script>
 
 <template>
-<div class="flex justify-center">
-  <div class="card w-120 bg-base-200 shadow-sm mt-16">
-    <div v-if="!createdCharacterId" class="card-body">
+<div class="flex justify-center px-3 sm:px-6">
+  <div class="card w-full max-w-120 bg-base-200 shadow-sm mt-6 sm:mt-16">
+    <div v-if="!createdCharacterId" class="card-body p-4 sm:p-8">
       <h3 class="text-lg font-bold my-4">创建角色</h3>
       <Photo ref="photo-ref"/>
       <Name ref="name-ref"/>
@@ -107,10 +107,10 @@ async function handleFinish(){
 
       <p v-if="errorMessage" class="text-sm text-red-500">{{errorMessage}}</p>
       <div class="flex justify-center">
-        <button @click="handleCreate" class="btn btn-neutral w-60 mt-2">创建</button>
+        <button @click="handleCreate" class="btn btn-neutral w-full max-w-60 mt-2">创建</button>
       </div>
     </div>
-    <div v-else class="card-body">
+    <div v-else class="card-body p-4 sm:p-8">
       <h3 class="text-lg font-bold my-4">导入聊天记录</h3>
       <div class="alert alert-success text-sm p-2">
         <span>角色已创建，可以继续导入聊天记录。</span>
@@ -118,9 +118,10 @@ async function handleFinish(){
       <WechatImport
         :characterId="createdCharacterId"
         :characterName="createdCharacterName"
+        memoryVisibility="private"
       />
       <div class="flex justify-center">
-        <button @click="handleFinish" class="btn btn-neutral w-60 mt-2">完成</button>
+        <button @click="handleFinish" class="btn btn-neutral w-full max-w-60 mt-2">完成</button>
       </div>
     </div>
   </div>

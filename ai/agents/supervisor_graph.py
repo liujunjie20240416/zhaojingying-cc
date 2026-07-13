@@ -24,12 +24,20 @@ class MultiAgentState(TypedDict):
     memory_context: str
     emotion_analysis: dict | None
     character_profile: str
+    style_profile: str
+    base_system_prompt: str
+    time_context: str
+    conversation_summary: str
     character_name: str
     chat_sender_name: str
     semantic_facts: list[str]
     friend_id: int
     character_id: int | None
     trace_metadata: NotRequired[dict]
+    emotion_context: NotRequired[list]
+    vision_attachments: NotRequired[list]
+    memory_done: NotRequired[bool]
+    emotion_done: NotRequired[bool]
 
 
 STRONG_EMOTION_SIGNALS = [
@@ -51,11 +59,11 @@ def wrap_supervisor(state: dict) -> dict:
 
 
 def wrap_memory(state: dict) -> dict:
-    return memory_agent_node(state)
+    return {**memory_agent_node(state), "memory_done": True}
 
 
 def wrap_emotion(state: dict) -> dict:
-    return emotion_agent_node(state)
+    return {**emotion_agent_node(state), "emotion_done": True}
 
 
 def wrap_conversation(state: dict) -> dict:
@@ -64,14 +72,17 @@ def wrap_conversation(state: dict) -> dict:
 
 def route_from_supervisor(state: dict) -> str:
     intent = state.get("intent", "chat")
-    # 强烈情绪优先走 Emotion Agent，其他一律先走 Memory Agent 做检索
+    # 强烈情绪优先；普通闲聊/时间直接回复；记忆类才检索。
     if intent == "emotional":
         return "emotion"
-    # chat / recall 都走 Memory → 增强 RAG 检索后再回复
-    return "memory"
+    if intent in {"recall", "memory"}:
+        return "memory"
+    return "conversation"
 
 
 def route_after_memory(state: dict) -> str:
+    if state.get("emotion_done"):
+        return "conversation"
     user_msg = _last_user_msg(state)
     for signal in STRONG_EMOTION_SIGNALS:
         if signal in user_msg:
@@ -80,6 +91,8 @@ def route_after_memory(state: dict) -> str:
 
 
 def route_after_emotion(state: dict) -> str:
+    if state.get("memory_done"):
+        return "conversation"
     intent = state.get("intent", "")
     user_msg = _last_user_msg(state)
     recall_signals = ["记得", "以前", "那次", "第一次", "上次", "什么时候"]

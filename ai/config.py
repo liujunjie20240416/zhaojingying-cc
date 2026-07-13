@@ -1,46 +1,64 @@
 """AI provider configuration helpers.
 
-The project uses two different providers:
+The project uses two provider groups:
 - DashScope for embeddings, ASR and TTS.
-- A chat LLM for preprocessing, memory reflection and conversation.
+- Zhipu/BigModel GLM for every generative LLM task.
 
-Legacy API_KEY/API_BASE remain as fallbacks for DashScope only. LLM calls must
-use explicit LLM_* variables so an embedding/voice key is never accidentally
-used for preprocessing or chat.
+GLM_* is the canonical text-model configuration. VISION_LLM_* can override the
+vision route. Legacy LLM_API_KEY is accepted only as a key migration fallback;
+legacy LLM base/model values deliberately cannot route traffic back to another
+provider.
 """
 
 import os
 
 
-DEFAULT_LLM_MODEL = "deepseek-v4-pro"
+DEFAULT_GLM_API_BASE = "https://open.bigmodel.cn/api/paas/v4"
+DEFAULT_LLM_MODEL = "glm-5.2"
 DEFAULT_DASHSCOPE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
 def llm_api_key() -> str:
-    return os.getenv("LLM_API_KEY", "").strip()
+    return (
+        os.getenv("GLM_API_KEY", "").strip()
+        or os.getenv("VISION_LLM_API_KEY", "").strip()
+        or os.getenv("LLM_API_KEY", "").strip()
+    )
 
 
 def llm_api_base() -> str:
-    return os.getenv("LLM_API_BASE", "").strip()
+    return os.getenv("GLM_API_BASE", "").strip() or DEFAULT_GLM_API_BASE
 
 
 def llm_model() -> str:
-    return os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL).strip() or DEFAULT_LLM_MODEL
+    return os.getenv("GLM_MODEL", DEFAULT_LLM_MODEL).strip() or DEFAULT_LLM_MODEL
+
+
+def vision_llm_api_key() -> str:
+    return os.getenv("VISION_LLM_API_KEY", "").strip() or llm_api_key()
+
+
+def vision_llm_api_base() -> str:
+    return os.getenv("VISION_LLM_API_BASE", "").strip() or llm_api_base()
+
+
+def vision_llm_model() -> str:
+    return os.getenv("VISION_LLM_MODEL", "glm-5v-turbo").strip() or "glm-5v-turbo"
 
 
 def require_llm_config():
     missing = []
     if not llm_api_key():
-        missing.append("LLM_API_KEY")
+        missing.append("GLM_API_KEY（也可暂时复用 VISION_LLM_API_KEY）")
     if not llm_api_base():
-        missing.append("LLM_API_BASE")
+        missing.append("GLM_API_BASE")
     if not llm_model():
-        missing.append("LLM_MODEL")
+        missing.append("GLM_MODEL")
     if missing:
         raise RuntimeError(
             "缺少大模型配置: "
             + ", ".join(missing)
-            + "。预处理、记忆反思和 AI 对话需要单独配置 LLM_*，不要使用阿里云 embedding/语音的 API。"
+            + "。预处理、记忆反思和 AI 对话统一使用 GLM；不要使用阿里云 embedding/语音的 API Key。"
         )
 
 

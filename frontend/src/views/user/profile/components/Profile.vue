@@ -17,7 +17,7 @@ defineExpose({
 <template>
 <field class="field">
   <label class="label text-base">简介</label>
-  <textarea v-model="myProfile" rows="6" class="textarea w-108"></textarea>
+  <textarea v-model="myProfile" rows="6" class="textarea w-full"></textarea>
 </field>
 </template>
 

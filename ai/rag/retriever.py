@@ -9,6 +9,7 @@ from langchain_community.vectorstores import LanceDB
 
 from ai.custom_embeddings import CustomEmbeddings
 from ai.rag.query_rewriter import QueryRewriter
+from ai.rag.scoring import lance_distance_to_relevance
 from ai.rag.hyde import HyDEGenerator
 
 _STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "documents" / "lancedb_storage")
@@ -99,7 +100,9 @@ class HybridRetriever:
                 results.append({
                     "content": doc.page_content[:800],
                     "source": "lancedb",
-                    "score": float(score),
+                    # LanceDB exposes a distance here: lower means closer.
+                    # The rest of this Module consistently ranks higher scores first.
+                    "score": lance_distance_to_relevance(score),
                 })
             return results
         except Exception:

@@ -63,8 +63,10 @@ def _do_analyze(
     lines = []
     for m in chunk["messages"]:
         role = "AI角色" if m["sender"] == target_name else "用户"
-        lines.append(f"[{m['timestamp']}] {role}: {m['content'][:200]}")
-    dialogue = "\n".join(lines[-60:])
+        lines.append(
+            f"[#msg_index={m['msg_index']}][{m['timestamp']}] {role}: {m['content'][:500]}"
+        )
+    dialogue = "\n".join(lines)
 
     time_range = f"{chunk['time_start']} ~ {chunk['time_end']}"
 
@@ -85,7 +87,7 @@ def _do_analyze(
 - 注意区分：不要把女友说的话当成用户的信息，也不要把用户说的话当成女友的信息；共同经历放到 relationship_fragments
 {context_note}
 对话内容：
-{dialogue[:3500]}
+{dialogue[:12000]}
 
 请输出纯 JSON（不要 markdown 代码块）：
 {{
@@ -93,16 +95,16 @@ def _do_analyze(
     "topics": ["大分类/细分类"],
     "key_events": ["客观关键事件"],
     "user_fragments": [
-        {{"fact": "关于用户的事实，每条独立完整、含主语'用户'", "category": "identity"}},
-        {{"fact": "用户的偏好", "category": "preference"}}
+        {{"fact": "关于用户的事实，每条独立完整、含主语'用户'", "category": "identity", "evidence_msg_indices": [123, 124]}},
+        {{"fact": "用户的偏好", "category": "preference", "evidence_msg_indices": [130]}}
     ],
     "girlfriend_fragments": [
-        {{"fact": "关于{target_name}的事实，每条独立完整、含角色名", "category": "identity"}},
-        {{"fact": "{target_name}的说话风格", "category": "identity"}}
+        {{"fact": "关于{target_name}的事实，每条独立完整、含角色名", "category": "identity", "evidence_msg_indices": [140]}},
+        {{"fact": "{target_name}的说话风格", "category": "identity", "evidence_msg_indices": [141, 142]}}
     ],
     "relationship_fragments": [
-        {{"fact": "两人共同经历过的事件，每条独立完整、含主语'两人'", "category": "experience"}},
-        {{"fact": "两人的相处规律或关系模式", "category": "relationship"}}
+        {{"fact": "两人共同经历过的事件，每条独立完整、含主语'两人'", "category": "experience", "evidence_msg_indices": [150, 151]}},
+        {{"fact": "两人的相处规律或关系模式", "category": "relationship", "evidence_msg_indices": [152, 153]}}
     ]
 }}
 
@@ -115,6 +117,7 @@ def _do_analyze(
 - girlfriend_fragments 每条 fact 必须独立完整，包含主语"{target_name}"（如"{target_name}说话温柔喜欢用颜文字"、"{target_name}自称是程序员"）
 - relationship_fragments 每条 fact 必须独立完整，包含主语"两人"或"他们"（如"两人曾因为冷处理吵架"、"用户委屈时{target_name}通常会先安慰"）
 - fragments 必须是对象数组，格式严格为 {{"fact": "...", "category": "identity"}}，不要输出字符串数组
+- evidence_msg_indices 必须引用对话行中的真实 msg_index，只保留直接支持该事实的消息；禁止虚构编号
 - 每个 fragment 的 category 从以下选一：identity（身份/性格）、preference（偏好/喜好）、experience（经历/事件）、relationship（与对方的互动规律）
 - 不要把一天/一段时间的情绪误判成长期性格；如果只是短期状态，fact 必须写明"这段时间"或"当天"
 - 不要把一次事件写成"总是/经常/习惯"，除非片段中有多次证据；证据不足时用更保守的说法
@@ -140,8 +143,9 @@ def _do_analyze(
         model=llm_model(),
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
-        max_tokens=8000,
+        max_tokens=3000,
         response_format={"type": "json_object"},
+        extra_body={"thinking": {"type": "disabled"}},
     )
     message = resp.choices[0].message
     content = (message.content or "").strip()
@@ -183,18 +187,24 @@ def _parse_json(content: str, chunk: dict) -> dict:
 
     try:
         result = json.loads(content)
+        allowed_indices = {
+            int(message["msg_index"]) for message in chunk.get("messages", [])
+        }
         return {
             "chunk_summary": str(result.get("chunk_summary", ""))[:200],
-            "topics": _ensure_list(result.get("topics"))[:10],
-            "key_events": _ensure_list(result.get("key_events"))[:10],
-            "user_fragments": _ensure_fragments(result.get("user_fragments"), "identity")[:30],
+            "topics": _ensure_list(result.get("topics"))[:5],
+            "key_events": _ensure_list(result.get("key_events"))[:6],
+            "user_fragments": _ensure_fragments(
+                result.get("user_fragments"), "identity", allowed_indices
+            )[:6],
             "girlfriend_fragments": _ensure_fragments(
                 result.get("girlfriend_fragments", result.get("character_fragments")),
                 "identity",
-            )[:30],
+                allowed_indices,
+            )[:6],
             "relationship_fragments": _ensure_fragments(
-                result.get("relationship_fragments"), "relationship"
-            )[:30],
+                result.get("relationship_fragments"), "relationship", allowed_indices
+            )[:6],
             "chunk_index": chunk["index"],
             "error": False,
         }
@@ -208,7 +218,11 @@ def _ensure_list(val) -> list:
     return []
 
 
-def _ensure_fragments(val, default_category: str = "identity") -> list[dict]:
+def _ensure_fragments(
+    val,
+    default_category: str = "identity",
+    allowed_indices: set[int] | None = None,
+) -> list[dict]:
     """确保 fragments 是合法的 {fact, category} 列表"""
     if not isinstance(val, list):
         return []
@@ -217,7 +231,10 @@ def _ensure_fragments(val, default_category: str = "identity") -> list[dict]:
         if isinstance(item, str):
             fact = item.strip()
             if fact:
-                result.append({"fact": fact[:300], "category": default_category})
+                result.append({
+                    "fact": fact[:300], "category": default_category,
+                    "evidence_msg_indices": [],
+                })
             continue
         if not isinstance(item, dict):
             continue
@@ -227,7 +244,21 @@ def _ensure_fragments(val, default_category: str = "identity") -> list[dict]:
             continue
         if category not in CATEGORY_OPTIONS:
             category = "identity"
-        result.append({"fact": fact[:300], "category": category})
+        raw_indices = item.get("evidence_msg_indices", [])
+        evidence_indices = []
+        if isinstance(raw_indices, list):
+            for value in raw_indices:
+                try:
+                    index = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if allowed_indices is None or index in allowed_indices:
+                    evidence_indices.append(index)
+        result.append({
+            "fact": fact[:300],
+            "category": category,
+            "evidence_msg_indices": sorted(set(evidence_indices)),
+        })
     return result
 
 

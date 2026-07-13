@@ -2,6 +2,7 @@ import pytest
 
 
 class TestEpisodicMemory:
+    @pytest.mark.llm_integration
     def test_extract_episodic_info(self, api_key, api_base):
         from ai.memory.episodic import extract_episodic_info
         result = extract_episodic_info("我今天吃了火锅，超好吃", "火锅确实很棒！你最喜欢哪家店？",
@@ -179,13 +180,21 @@ class TestPreprocessingChunker:
 class TestReflection:
     @pytest.mark.django_db
     def test_reflection_skip_when_recent(self):
-        """距上次 reflection < 6h 应跳过"""
-        from django.utils.timezone import now
+        """没有已完成聊天日时不执行 reflection。"""
         from ai.memory.reflection import reflect_memories
-        friend = type("f", (), {
-            "id": 1,
-            "last_reflection_time": now(),
-        })()
+        from django.contrib.auth.models import User
+        from web.models.user import UserProfile
+        from web.models.character import Character
+        from web.models.friend import Friend
+
+        user = User.objects.create_user(username="reflection-empty")
+        profile = UserProfile.objects.create(user=user)
+        character = Character.objects.create(
+            author=profile, name="女友", profile="温柔",
+            photo="character/photos/default.jpg",
+            background_image="character/background_images/default.jpg",
+        )
+        friend = Friend.objects.create(me=profile, character=character)
         result = reflect_memories(friend, force=False)
         assert result == []
 

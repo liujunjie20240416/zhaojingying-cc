@@ -24,11 +24,16 @@ class ImportAnalysis(models.Model):
         choices=[
             ("pending", "待分析"),
             ("analyzing", "分析中"),
+            ("partial", "部分完成，可断点继续"),
             ("done", "已完成"),
             ("failed", "失败"),
         ],
     )
     error_message = models.TextField(default="")
+    total_chunks = models.PositiveIntegerField(default=0)
+    completed_chunks = models.PositiveIntegerField(default=0)
+    failed_chunks = models.PositiveIntegerField(default=0)
+    stage = models.CharField(max_length=30, default="pending")
     created_at = models.DateTimeField(default=now)
     updated_at = models.DateTimeField(default=now)
 
@@ -39,6 +44,37 @@ class ImportAnalysis(models.Model):
         return f"{self.character.name} — {self.status} ({self.total_messages} 条消息)"
 
 
+class PreprocessingCheckpoint(models.Model):
+    """导入预处理 Map 阶段的可恢复断点。
+
+    只复用 source_fingerprint 和 chunk_fingerprint 都一致的成功结果；原始聊天
+    发生变化时会自然进入一组新断点，不会把旧分析混入新导入。
+    """
+
+    character = models.ForeignKey(Character, on_delete=models.CASCADE)
+    source_fingerprint = models.CharField(max_length=64)
+    chunk_index = models.PositiveIntegerField()
+    chunk_fingerprint = models.CharField(max_length=64)
+    result_json = models.JSONField(default=dict)
+    created_at = models.DateTimeField(default=now)
+    updated_at = models.DateTimeField(default=now)
+
+    class Meta:
+        db_table = "preprocessing_checkpoint"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["character", "source_fingerprint", "chunk_index"],
+                name="unique_character_source_chunk",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["character", "source_fingerprint"],
+                name="checkpoint_char_source",
+            ),
+        ]
+
+
 class TimeChunk(models.Model):
     """时间标签 — 给消息段打上自然语义标签（如 "2024年夏天 · 暧昧期"）"""
 
@@ -46,7 +82,7 @@ class TimeChunk(models.Model):
     label = models.CharField(max_length=100)             # "2024年夏天 · 暧昧期"
     start_msg_index = models.IntegerField()
     end_msg_index = models.IntegerField()
-    summary = models.CharField(max_length=200)            # 一句话总结
+    summary = models.TextField(default="")                # 日级摘要（条件式 LLM Reduce）
     key_events = models.TextField(default="[]")           # JSON: ["第一次约会", "吵架"]
 
     class Meta:

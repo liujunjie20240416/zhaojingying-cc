@@ -14,6 +14,7 @@ export const EMOTION_EMOJI_MAP = {
   想你: '🥰',
   撒娇: '🥺',
   别扭: '🙂‍↕️',
+  吃醋: '😤',
 }
 
 export const USER_EMOJI_MEANINGS = {
@@ -34,6 +35,7 @@ export const USER_EMOJI_MEANINGS = {
   '💕': '喜欢、亲密、甜蜜',
   '🙂‍↕️': '不满、别扭、有点抗拒、嘴硬或小情绪',
   '🙂‍↔️': '拒绝、不要、不认同、轻微抗拒',
+  '😤': '吃醋、不满、傲娇、嘴硬',
 }
 
 const markerPattern = /【([^【】]{1,12})】|\[([^[\]]{1,12})\]/g

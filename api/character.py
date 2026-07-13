@@ -5,7 +5,8 @@ from django.utils.timezone import now as djnow
 from pathlib import Path
 
 from api.deps import get_current_user
-from api.schemas import RemoveCharacterRequest
+from api.schemas import RemoveCharacterRequest, UpdateImportedMemoryVisibilityRequest
+from ai.memory.import_access import set_imported_context_visibility
 from web.models.character import Character, Voice
 from web.utils.photo import remove_old_photo
 from web.utils.user_profile import get_or_create_user_profile
@@ -127,6 +128,26 @@ def remove_character(data: RemoveCharacterRequest, user=Depends(get_current_user
         return {"result": "系统异常，请稍后重试"}
 
 
+@router.post("/api/create/character/imported-memory-visibility/")
+def update_imported_memory_visibility(
+    data: UpdateImportedMemoryVisibilityRequest,
+    user=Depends(get_current_user),
+):
+    try:
+        character = Character.objects.get(id=data.character_id, author__user=user)
+        set_imported_context_visibility(character, data.visibility)
+        return {
+            "result": "success",
+            "visibility": character.imported_memory_visibility,
+        }
+    except Character.DoesNotExist:
+        return {"result": "角色不存在或不属于你"}
+    except ValueError as exc:
+        return {"result": str(exc)}
+    except Exception:
+        return {"result": "系统异常，请稍后重试"}
+
+
 @router.get("/api/create/character/get_single/")
 def get_single_character(
     character_id: int = Query(...), user=Depends(get_current_user)
@@ -144,6 +165,8 @@ def get_single_character(
                 "photo": character.photo.url,
                 "background_image": character.background_image.url,
                 "voice_id": character.voice_id,
+                "style_profile": character.style_profile,
+                "imported_memory_visibility": character.imported_memory_visibility,
             },
             "voices": voices,
         }

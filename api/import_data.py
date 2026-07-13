@@ -17,6 +17,7 @@ from langchain_community.vectorstores import LanceDB
 
 from ai.custom_embeddings import CustomEmbeddings
 from api.deps import get_current_user
+from api.schemas import ResumeImportRequest
 from web.models.character import Character
 from web.models.chat_message import ChatMessage
 from web.models.import_analysis import ImportAnalysis
@@ -24,6 +25,8 @@ from tools.wechat_parser import parse_wechat_txt, format_output_as_chunks
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_active_preprocessing: set[int] = set()
+_active_preprocessing_lock = threading.Lock()
 
 # LanceDB 存储目录
 _STORAGE_DIR = str(
@@ -132,11 +135,7 @@ def import_wechat(
             """)
 
         # ── 触发异步预处理 ──
-        threading.Thread(
-            target=_run_preprocessing_async,
-            args=(character_id,),
-            daemon=True,
-        ).start()
+        _start_preprocessing(character_id)
 
         return {
             "result": "success",
@@ -154,6 +153,20 @@ def import_wechat(
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+def _start_preprocessing(character_id: int) -> bool:
+    """Start at most one preprocessing worker per character in this process."""
+    with _active_preprocessing_lock:
+        if character_id in _active_preprocessing:
+            return False
+        _active_preprocessing.add(character_id)
+    threading.Thread(
+        target=_run_preprocessing_async,
+        args=(character_id,),
+        daemon=True,
+    ).start()
+    return True
 
 
 def _run_preprocessing_async(character_id: int):
@@ -174,11 +187,31 @@ def _run_preprocessing_async(character_id: int):
             )
         except Exception:
             logger.exception("[Import] Failed to persist preprocessing error")
+    finally:
+        with _active_preprocessing_lock:
+            _active_preprocessing.discard(character_id)
+
+
+@router.post("/api/import/resume/")
+def resume_import(data: ResumeImportRequest, user=Depends(get_current_user)):
+    """Continue preprocessing from successful Map checkpoints without re-uploading."""
+    character = Character.objects.filter(id=data.character_id, author__user=user).first()
+    if not character:
+        return {"result": "角色不存在或不属于你"}
+    if not ChatMessage.objects.filter(character_id=data.character_id).exists():
+        return {"result": "没有可恢复的聊天原文，请先导入聊天记录"}
+
+    started = _start_preprocessing(data.character_id)
+    return {
+        "result": "success",
+        "started": started,
+        "message": "已从断点继续处理" if started else "该角色的预处理仍在运行",
+    }
 
 
 @router.get("/api/import/status/")
 def import_status(character_id: int = Query(...), user=Depends(get_current_user)):
-    """查询预处理进度。analyzing 时 total_messages 为进度百分比(0-100)，done 后为实际条数。"""
+    """Return durable chunk progress; raw message count is never overloaded as percent."""
     try:
         character = Character.objects.filter(id=character_id, author__user=user).first()
         if not character:
@@ -191,11 +224,23 @@ def import_status(character_id: int = Query(...), user=Depends(get_current_user)
             "result": "success",
             "status": analysis.status,
             "error_message": analysis.error_message,
+            "stage": analysis.stage,
+            "total_messages": analysis.total_messages,
+            "total_chunks": analysis.total_chunks,
+            "completed_chunks": analysis.completed_chunks,
+            "failed_chunks": analysis.failed_chunks,
         }
         if analysis.status == "analyzing":
-            resp["progress_pct"] = analysis.total_messages  # 临时存的是百分比
-        else:
-            resp["total_messages"] = analysis.total_messages
+            if analysis.stage == "relationship_reduce":
+                resp["progress_pct"] = 96
+            elif analysis.stage == "style_reduce":
+                resp["progress_pct"] = 97
+            elif analysis.stage == "writing":
+                resp["progress_pct"] = 98
+            else:
+                resp["progress_pct"] = int(
+                    analysis.completed_chunks / analysis.total_chunks * 95
+                ) if analysis.total_chunks else 0
         return resp
     except Exception:
         return {"result": "系统异常，请稍后重试"}

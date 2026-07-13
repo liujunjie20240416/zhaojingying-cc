@@ -46,7 +46,8 @@ assets_dir = PROJECT_ROOT / "static" / "frontend" / "assets"
 if assets_dir.exists():
     app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
-media_dir = PROJECT_ROOT / "media"
+from django.conf import settings
+media_dir = Path(settings.MEDIA_ROOT)
 media_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=str(media_dir)), name="media")
 

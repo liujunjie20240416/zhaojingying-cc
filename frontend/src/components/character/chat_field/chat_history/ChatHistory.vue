@@ -76,12 +76,14 @@ async function loadMore(){
         emit('pushFrontMessage',{
           role:'ai',
           content:m.output,
+          bubbles:m.output_bubbles || (m.output ? [m.output] : []),
           id:crypto.randomUUID(),
           createdAt:m.create_time,
         })
         emit('pushFrontMessage',{
           role:'user',
           content:m.user_message,
+          attachments:m.attachments || [],
           id:crypto.randomUUID(),
           createdAt:m.create_time,
         })
@@ -132,7 +134,7 @@ defineExpose({
 </script>
 
 <template>
- <div ref="scroll-ref" class="absolute top-18 left-0 w-90 h-112 overflow-y-scroll no-scrollbar">
+ <div ref="scroll-ref" class="chat-history absolute overflow-y-scroll no-scrollbar">
    <div ref="sentinel-ref" class="h-2 "></div>
    <template v-for="item in displayItems" :key="item.id">
      <div v-if="item.type === 'time'" class="chat-time-separator">
@@ -157,6 +159,13 @@ defineExpose({
 .no-scrollbar {
   -ms-overflow-style: none; /* IE and Edge */
   scrollbar-width: none; /* Firefox */
+}
+
+.chat-history {
+  top: 72px;
+  right: 0;
+  bottom: 76px;
+  left: 0;
 }
 
 .chat-time-separator {

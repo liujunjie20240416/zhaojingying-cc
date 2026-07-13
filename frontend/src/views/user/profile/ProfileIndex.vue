@@ -52,16 +52,16 @@ async function handleUpdate(){
 </script>
 
 <template>
-<div class="flex justify-center">
-  <div class="card w-120 bg-base-200 shadow-sm mt-16">
-    <div class="card-body">
+<div class="flex justify-center px-3 sm:px-6">
+  <div class="card w-full max-w-120 bg-base-200 shadow-sm mt-6 sm:mt-16">
+    <div class="card-body p-4 sm:p-8">
       <h3 class="text-lg font-bold my-4">编辑资料</h3>
       <Photo ref="photo-ref" :photo="user.photo" />
       <Username ref="username-ref" :username="user.username" />
       <Profile ref="profile-ref" :profile="user.profile" />
       <p v-if="errorMessage" class="text-sm text-red-500">{{errorMessage}}</p>
       <div class="flex justify-center">
-        <button @click="handleUpdate" class="btn btn-neutral w-60 mt-2">更新</button>
+        <button @click="handleUpdate" class="btn btn-neutral w-full max-w-60 mt-2">更新</button>
       </div>
     </div>
   </div>
@@ -71,4 +71,3 @@ async function handleUpdate(){
 <style scoped>
 
 </style>
-

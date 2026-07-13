@@ -40,7 +40,9 @@ def test_memory_agent_skips_wechat_search_without_imported_messages(monkeypatch)
     def fail_if_called(*args, **kwargs):
         raise AssertionError("No-import characters should not search stale WeChat indexes")
 
-    monkeypatch.setattr(memory_agent.HybridRetriever, "hybrid_search", fail_if_called)
+    monkeypatch.setattr(
+        memory_agent.ConversationHistorySearch, "search", fail_if_called
+    )
 
     result = memory_agent.memory_agent_node(
         {
