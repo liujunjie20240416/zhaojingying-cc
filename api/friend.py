@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 
 from api.deps import get_current_user
+from api.errors import ApiError
 from api.schemas import GetOrCreateFriendRequest, RemoveFriendRequest
 from web.models.character import Character
 from web.models.friend import Friend
@@ -40,8 +41,8 @@ def get_friend_list(
                 }
             )
         return {"result": "success", "friends": friends}
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Exception as exc:
+        raise ApiError(500, "friend_list_failed", "好友列表加载失败，请稍后重试", True) from exc
 
 
 @router.post("/api/friend/get_or_create/")
@@ -80,8 +81,10 @@ def get_or_create_friend(
                 },
             },
         }
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Character.DoesNotExist as exc:
+        raise ApiError(404, "character_not_found", "角色不存在") from exc
+    except Exception as exc:
+        raise ApiError(500, "friend_create_failed", "好友创建失败，请稍后重试", True) from exc
 
 
 @router.post("/api/friend/remove/")
@@ -89,5 +92,5 @@ def remove_friend(data: RemoveFriendRequest, user=Depends(get_current_user)):
     try:
         Friend.objects.filter(id=data.friend_id, me__user=user).delete()
         return {"result": "success"}
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Exception as exc:
+        raise ApiError(500, "friend_remove_failed", "好友删除失败，请稍后重试", True) from exc

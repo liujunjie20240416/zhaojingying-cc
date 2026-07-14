@@ -6,6 +6,7 @@ import ChatHistory from "@/components/character/chat_field/chat_history/ChatHist
 import MemoryManager from "@/components/character/chat_field/MemoryManager.vue";
 import RemoveIcon from "@/components/character/icons/RemoveIcon.vue";
 import api from "@/js/http/api.js";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 
 const props = defineProps(['friend'])
 const modalRef = useTemplateRef('modal-ref')
@@ -15,6 +16,7 @@ const chatHistoryRef = useTemplateRef('chat-history-ref')
 const clearing = ref(false)
 const showMemoryManager = ref(false)
 const isOnline = ref(true)
+const chatError = ref('')
 const isTyping = computed(() => {
   const lastMessage = history.value.at(-1)
   return Boolean(lastMessage?.role === 'ai' && lastMessage?.isTyping)
@@ -113,6 +115,7 @@ function handleSetLastMessageBubbles(bubbles){
 }
 function handleConnectionOnline() {
   isOnline.value = true
+  chatError.value = ''
 }
 function handleConnectionError() {
   const lastMessage = history.value.at(-1)
@@ -120,6 +123,7 @@ function handleConnectionError() {
     lastMessage.isTyping = false
   }
   isOnline.value = false
+  chatError.value = '连接失败，请重试'
 }
 function handleTypingFinished() {
   const lastMessage = history.value.at(-1)
@@ -136,19 +140,26 @@ function handleClose() {
 }
 
 async function handleClearHistory() {
-  if (!confirm('确定清除所有对话历史吗？')) return
+  if (!confirm(
+    '确定清除与这个角色的所有在线聊天吗？\n\n' +
+    '会删除：聊天原文、聊天图片、AI 从这些聊天自动提炼的记忆。\n' +
+    '会保留：导入聊天产生的记忆、你手动添加或确认的记忆。'
+  )) return
   clearing.value = true
+  chatError.value = ''
   try {
     const res = await api.post('/api/friend/message/clear/', {
       friend_id: props.friend.id,
     })
     if (res.data.result === 'success') {
+      inputRef.value?.cancelCurrentRequest()
       clearBubbleTimers()
       pendingBubbleState = null
       history.value = []
       clearing.value = false
     }
   } catch (err) {
+    chatError.value = getApiErrorMessage(err, '聊天记录清除失败，请稍后重试')
     clearing.value = false
   }
 }
@@ -163,6 +174,7 @@ defineExpose({
 <template>
   <dialog ref="modal-ref" class="modal" @close="handleClose">
     <div class="modal-box chat-modal-box" :style="modalStyle">
+      <div v-if="chatError" class="absolute left-3 right-3 top-16 z-30 rounded-lg bg-error/90 px-3 py-2 text-xs text-error-content">{{ chatError }}</div>
       <div class="chat-top-bar">
         <div v-if="friend" class="chat-status-bar">
           <div class="status-avatar">

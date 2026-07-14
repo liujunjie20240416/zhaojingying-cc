@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import JSONResponse
 
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
@@ -7,6 +6,7 @@ from django.conf import settings
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from api.deps import get_current_user
+from api.errors import ApiError
 from api.schemas import LoginRequest, RegisterRequest
 from web.models.user import UserProfile
 
@@ -29,11 +29,11 @@ def login(data: LoginRequest, response: Response):
     username = data.username.strip()
     password = data.password.strip()
     if not username or not password:
-        return {"result": "用户名和密码不能为空"}
+        raise ApiError(422, "empty_credentials", "用户名和密码不能为空")
 
     user = authenticate(username=username, password=password)
     if not user:
-        return {"result": "用户名或密码错误"}
+        raise ApiError(401, "invalid_credentials", "用户名或密码错误")
 
     user_profile, _ = UserProfile.objects.get_or_create(user=user)
     refresh = RefreshToken.for_user(user)
@@ -53,9 +53,9 @@ def register(data: RegisterRequest, response: Response):
     username = data.username.strip()
     password = data.password.strip()
     if not username or not password:
-        return {"result": "用户名和密码不能为空"}
+        raise ApiError(422, "empty_credentials", "用户名和密码不能为空")
     if User.objects.filter(username=username).exists():
-        return {"result": "用户名已存在"}
+        raise ApiError(409, "username_exists", "用户名已存在")
 
     user = User.objects.create_user(username=username, password=password)
     user_profile = UserProfile.objects.create(user=user)
@@ -81,12 +81,12 @@ def logout(response: Response, user=Depends(get_current_user)):
 def refresh_token(request: Request, response: Response):
     refresh_token_cookie = request.cookies.get("refresh_token")
     if not refresh_token_cookie:
-        return JSONResponse({"result": "refresh_token不存在"}, status_code=401)
+        raise ApiError(401, "refresh_token_missing", "refresh_token不存在")
 
     try:
         refresh = RefreshToken(refresh_token_cookie)
         refresh.set_jti()
         set_refresh_cookie(response, refresh)
         return {"result": "success", "access": str(refresh.access_token)}
-    except Exception:
-        return JSONResponse({"result": "refresh token过期了"}, status_code=401)
+    except Exception as exc:
+        raise ApiError(401, "refresh_token_invalid", "refresh token无效或已过期") from exc

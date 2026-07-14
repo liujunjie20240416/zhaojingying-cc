@@ -22,10 +22,23 @@ django.setup()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.wsgi import WSGIMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from api.errors import install_error_handlers
+
 app = FastAPI()
+install_error_handlers(app)
+
+
+class PublicMediaStaticFiles(StaticFiles):
+    """Expose public media while denying legacy direct URLs for chat images."""
+
+    async def get_response(self, path: str, scope):
+        normalized = path.replace("\\", "/").lstrip("/")
+        if normalized == "chat_images" or normalized.startswith("chat_images/"):
+            return Response(status_code=404)
+        return await super().get_response(path, scope)
 
 # ── CORS ──
 app.add_middleware(
@@ -49,7 +62,7 @@ if assets_dir.exists():
 from django.conf import settings
 media_dir = Path(settings.MEDIA_ROOT)
 media_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/media", StaticFiles(directory=str(media_dir)), name="media")
+app.mount("/media", PublicMediaStaticFiles(directory=str(media_dir)), name="media")
 
 # Django admin static files
 import django.contrib.admin as admin_module

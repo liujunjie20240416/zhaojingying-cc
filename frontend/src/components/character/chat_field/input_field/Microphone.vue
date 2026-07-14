@@ -5,13 +5,16 @@ import {onBeforeUnmount, onMounted, ref} from "vue";
 import {MicVAD} from "@ricky0123/vad-web";
 import api from "@/js/http/api.js";
 import CONFIG_API from "@/js/config/config.js";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 const emit = defineEmits(['close','send','stop'])
 const isSpeaking=ref(false)
+const errorMessage=ref('')
 
 
 let vadInstance = null;
 
 const startRecording = async () => {
+  errorMessage.value = ''
   const baseUrl = CONFIG_API.VAD_URL
   try {
     vadInstance = await MicVAD.new({
@@ -37,7 +40,7 @@ const startRecording = async () => {
 
     await vadInstance.start();
   } catch (e) {
-    console.error("VAD 初始化失败:", e);
+    errorMessage.value = '麦克风初始化失败，请检查浏览器权限'
   }
 };
 // 将 Float32 转 PCM 16-bit
@@ -56,13 +59,14 @@ const sendToBackend = async (arrayBuffer) => {
   formData.append("audio", blob, 'voice.pcm')
 
   try {
+    errorMessage.value = ''
     const res = await api.post('/api/friend/message/asr/asr/', formData)
     const data = res.data
     if (data.result === 'success') {
       emit('send', null, data.text)
     }
   } catch (err) {
-    console.error(err)
+    errorMessage.value = getApiErrorMessage(err, '语音识别失败，请重试')
   }
 };
 
@@ -84,6 +88,7 @@ onBeforeUnmount(() => {
 
 <template>
 <div class="absolute bottom-4 left-2 right-2 h-12 flex items-center bg-black/30 backdrop-blur-sm rounded-2xl">
+  <div v-if="errorMessage" class="absolute bottom-14 left-0 right-0 rounded-lg bg-error/90 px-3 py-2 text-xs text-error-content">{{ errorMessage }}</div>
   <div v-if="isSpeaking" class="flex items-center justify-center gap-1 h-6 flex-1">
   <div
     v-for="i in 32" :key="i"

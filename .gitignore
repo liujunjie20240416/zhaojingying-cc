@@ -38,6 +38,9 @@ frontend/node_modules/
 # ── Git Worktrees ──
 .worktrees/
 
+# ── 本地任务与分析 ──
+.scratch/
+
 # ── VSCode（保留 extensions.json 用于团队一致） ──
 .vscode/*
 !.vscode/extensions.json

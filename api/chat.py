@@ -6,12 +6,14 @@ import uuid
 from queue import Queue
 
 import websockets
+from django.db import transaction
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, AIMessage
 
 from ai.config import dashscope_api_key, dashscope_wss_url
 from api.deps import get_current_user
+from api.errors import ApiError
 from api.schemas import ChatRequest
 from web.models.character import Character
 from web.models.friend import Friend, Message, MessageAttachment, SystemPrompt
@@ -158,7 +160,58 @@ def _build_conversation_messages(
     return messages
 
 
-def event_stream(app, inputs, friend, message, attachment_ids):
+def _save_completed_message(
+    *,
+    friend_id: int,
+    expected_generation: int,
+    display_message: str,
+    inputs: dict,
+    full_output: str,
+    output_bubbles: list,
+    full_usage: dict,
+    attachment_ids: list[int],
+) -> Message | None:
+    """Save a completed response only if its Online Chat generation is current.
+
+    The row lock makes this atomic with clear_history(): either the message is
+    saved first and then cleared, or clear increments the generation first and
+    this stale response is discarded.
+    """
+    with transaction.atomic():
+        current_friend = Friend.objects.select_for_update().get(id=friend_id)
+        if current_friend.online_history_generation != expected_generation:
+            return None
+
+        saved_message = Message.objects.create(
+            friend=current_friend,
+            user_message=display_message[:500],
+            input=json.dumps(
+                [m.model_dump() for m in inputs["messages"]],
+                ensure_ascii=False,
+            )[:10000],
+            output=full_output,
+            output_bubbles=output_bubbles,
+            input_tokens=full_usage.get("input_tokens", 0),
+            output_tokens=full_usage.get("output_tokens", 0),
+            total_tokens=full_usage.get("total_tokens", 0),
+        )
+        if attachment_ids:
+            MessageAttachment.objects.filter(
+                id__in=attachment_ids,
+                friend=current_friend,
+                message__isnull=True,
+            ).update(message=saved_message)
+        return saved_message
+
+
+def event_stream(
+    app,
+    inputs,
+    friend,
+    message,
+    attachment_ids,
+    expected_generation,
+):
     mq = Queue()
     thread = threading.Thread(
         target=work,
@@ -182,26 +235,26 @@ def event_stream(app, inputs, friend, message, attachment_ids):
         if msg.get("usage", None):
             full_usage = msg["usage"]
 
-    input_tokens = full_usage.get("input_tokens", 0)
-    output_tokens = full_usage.get("output_tokens", 0)
-    total_tokens = full_usage.get("total_tokens", 0)
-    saved_message = Message.objects.create(
-        friend=friend,
-        user_message=message[:500],
-        input=json.dumps(
-            [m.model_dump() for m in inputs["messages"]],
-            ensure_ascii=False,
-        )[:10000],
-        output=full_output,
+    saved_message = _save_completed_message(
+        friend_id=friend.id,
+        expected_generation=expected_generation,
+        display_message=message,
+        inputs=inputs,
+        full_output=full_output,
         output_bubbles=output_bubbles,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        total_tokens=total_tokens,
+        full_usage=full_usage,
+        attachment_ids=attachment_ids,
     )
-    if attachment_ids:
-        MessageAttachment.objects.filter(
-            id__in=attachment_ids, friend=friend, message__isnull=True
-        ).update(message=saved_message)
+    if saved_message is None:
+        record_trace(
+            "chat.stream_discarded",
+            {"friend_id": friend.id, "expected_generation": expected_generation},
+            {"reason": "online_history_was_cleared"},
+            metadata=inputs.get("trace_metadata", {}),
+        )
+        yield "data: [DONE]\n\n"
+        return
+
     record_trace(
         "chat.stream_output",
         {
@@ -232,11 +285,11 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
     message = data.message.strip()
     display_message = message
     if not message and not data.attachment_ids:
-        return {"result": "消息不能为空"}
+        raise ApiError(422, "empty_message", "消息不能为空")
 
     friends = Friend.objects.filter(pk=data.friend_id, me__user=user)
     if not friends.exists():
-        return {"result": "好友不存在"}
+        raise ApiError(404, "friend_not_found", "好友不存在")
 
     friend = friends.first()
     attachment_ids = list(dict.fromkeys(data.attachment_ids))
@@ -244,7 +297,11 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
         id__in=attachment_ids, friend=friend, message__isnull=True
     ))
     if len(attachments) != len(attachment_ids):
-        return {"result": "图片不存在、已发送或不属于当前好友"}
+        raise ApiError(
+            409,
+            "attachment_unavailable",
+            "图片不存在、已发送或不属于当前好友",
+        )
     if not message:
         message = "请看看我发的图片"
 
@@ -330,7 +387,6 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
             "recent_message_count": len(message_raw),
             "conversation_summary": conversation_summary,
             "messages": serialize_messages(messages),
-            "friend_memory_cache_not_injected": friend.memory,
             "character_profile": friend.character.profile,
             "vision_attachment_count": len(vision_attachments),
         },
@@ -338,7 +394,14 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
     )
 
     return StreamingResponse(
-        event_stream(app, inputs, friend, display_message, attachment_ids),
+        event_stream(
+            app,
+            inputs,
+            friend,
+            display_message,
+            attachment_ids,
+            friend.online_history_generation,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

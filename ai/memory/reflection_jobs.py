@@ -40,8 +40,26 @@ def enqueue_completed_chat_days(friend: Friend) -> list[int]:
         job, _ = ReflectionJob.objects.get_or_create(
             friend=friend,
             chat_day=chat_day,
-            defaults={"status": "pending", "updated_at": now()},
+            defaults={
+                "history_generation": friend.online_history_generation,
+                "status": "pending",
+                "updated_at": now(),
+            },
         )
+        if (
+            job.history_generation != friend.online_history_generation
+            and job.status != "done"
+        ):
+            job.history_generation = friend.online_history_generation
+            job.status = "pending"
+            job.attempts = 0
+            job.locked_at = None
+            job.error_message = ""
+            job.updated_at = now()
+            job.save(update_fields=[
+                "history_generation", "status", "attempts", "locked_at",
+                "error_message", "updated_at",
+            ])
         if job.status != "done":
             job_ids.append(job.id)
     return job_ids
@@ -83,11 +101,22 @@ def process_pending_reflection_jobs(
         if not job:
             break
         try:
-            reflect_memories(job.friend, target_chat_day=job.chat_day)
-            ReflectionJob.objects.filter(id=job.id).update(
+            reflect_memories(
+                job.friend,
+                target_chat_day=job.chat_day,
+                expected_history_generation=job.history_generation,
+            )
+            current_generation = Friend.objects.filter(id=job.friend_id).values_list(
+                "online_history_generation", flat=True
+            ).first()
+            if current_generation != job.history_generation:
+                ReflectionJob.objects.filter(id=job.id).delete()
+                continue
+            updated = ReflectionJob.objects.filter(id=job.id).update(
                 status="done", locked_at=None, error_message="", updated_at=now()
             )
-            result["done"] += 1
+            if updated:
+                result["done"] += 1
         except Exception as exc:
             logger.exception("Reflection job %s failed", job.id)
             ReflectionJob.objects.filter(id=job.id).update(

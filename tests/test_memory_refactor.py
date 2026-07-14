@@ -508,8 +508,8 @@ def test_reflection_jobs_are_unique_and_claimed_once(monkeypatch):
     monkeypatch.setattr(
         module,
         "reflect_memories",
-        lambda current_friend, target_chat_day: calls.append(
-            (current_friend.id, target_chat_day)
+        lambda current_friend, target_chat_day, expected_history_generation: calls.append(
+            (current_friend.id, target_chat_day, expected_history_generation)
         ),
     )
 
@@ -519,7 +519,7 @@ def test_reflection_jobs_are_unique_and_claimed_once(monkeypatch):
 
     assert first == {"done": 1, "failed": 0}
     assert second == {"done": 0, "failed": 0}
-    assert calls == [(friend.id, datetime.date(2026, 7, 8))]
+    assert calls == [(friend.id, datetime.date(2026, 7, 8), 0)]
     assert job.status == "done"
     assert job.attempts == 1
 

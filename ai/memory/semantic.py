@@ -94,8 +94,17 @@ def _index_fact(friend_id: int, fact: str, memory_id: int | None = None):
             metadatas=[{"memory_id": str(memory_id)}] if memory_id is not None else None,
             connection=db, table_name=table_name, mode="append",
         )
+        return True
     except Exception:
         logger.exception("Failed to append SemanticMemory %s to %s", memory_id, table_name)
+        return False
+
+
+def index_semantic_memory(memory: SemanticMemory) -> bool:
+    """Append or refresh one active Semantic Memory vector."""
+    if not memory.is_active:
+        return False
+    return _index_fact(memory.friend_id, memory.fact, memory.id)
 
 
 def rebuild_semantic_index(friend_id: int) -> bool:
@@ -141,6 +150,31 @@ def rebuild_semantic_index(friend_id: int) -> bool:
             except Exception:
                 logger.exception("Failed to clean temporary semantic index %s", temp_name)
         logger.exception("Failed to rebuild semantic index %s; previous index retained", table_name)
+        return False
+
+
+def delete_semantic_index_entries(friend_id: int, memory_ids: list[int]) -> bool:
+    """Delete selected Semantic Memory vectors without re-embedding kept facts."""
+    normalized_ids = sorted({int(memory_id) for memory_id in memory_ids})
+    if not normalized_ids:
+        return True
+    table_name = f"semantic_{friend_id}"
+    try:
+        db = lancedb.connect(_STORAGE_DIR)
+        if table_name not in _table_names(db):
+            return True
+        values = ", ".join(f"'{memory_id}'" for memory_id in normalized_ids)
+        db.open_table(table_name).delete(f"metadata.memory_id IN ({values})")
+        return True
+    except Exception:
+        # SQLite remains authoritative. search_semantic resolves every vector
+        # back to an active DB row, so a stale vector cannot resurrect a
+        # deleted fact; maintenance can retry storage cleanup later.
+        logger.exception(
+            "Failed to delete Semantic Memory ids %s from %s",
+            normalized_ids,
+            table_name,
+        )
         return False
 
 
@@ -225,7 +259,13 @@ def add_fact(
     return sm
 
 
-def resolve_conflict(friend_id: int, old_fact: str, new_fact: str):
+def resolve_conflict(
+    friend_id: int,
+    old_fact: str,
+    new_fact: str,
+    *,
+    index: bool = True,
+):
     """冲突解决：旧事实转为历史状态，新事实成为当前状态。"""
     old_sm = SemanticMemory.objects.filter(friend_id=friend_id, fact=old_fact, is_active=True).first()
     if old_sm and (old_sm.is_locked or not old_sm.is_mutable):
@@ -236,7 +276,8 @@ def resolve_conflict(friend_id: int, old_fact: str, new_fact: str):
             is_mutable=old_sm.is_mutable, is_locked=old_sm.is_locked,
             memory_state="current", valid_from=now(),
         )
-        _index_fact(friend_id, new_fact, new_sm.id)
+        if index:
+            _index_fact(friend_id, new_fact, new_sm.id)
         return new_sm
     current_time = now()
     new_sm = SemanticMemory.objects.create(
@@ -252,7 +293,8 @@ def resolve_conflict(friend_id: int, old_fact: str, new_fact: str):
         old_sm.valid_to = current_time
         old_sm.replaced_by = new_sm
         old_sm.save(update_fields=["memory_state", "valid_to", "replaced_by", "updated_at"])
-    _index_fact(friend_id, new_fact, new_sm.id)
+    if index:
+        _index_fact(friend_id, new_fact, new_sm.id)
     return new_sm
 
 

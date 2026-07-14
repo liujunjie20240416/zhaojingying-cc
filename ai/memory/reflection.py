@@ -19,8 +19,8 @@ from ai.memory.chat_day import (
     get_chat_day_range,
 )
 from ai.memory.semantic import (
-    add_fact, add_memory_evidence, rebuild_semantic_index,
-    resolve_conflict, sync_friend_memory_cache,
+    add_fact, add_memory_evidence, delete_semantic_index_entries,
+    index_semantic_memory, resolve_conflict,
 )
 
 MIN_MESSAGES_PER_CHAT_DAY = 5
@@ -73,12 +73,15 @@ def reflect_memories(
     force: bool = False,
     api_key: str = "",
     api_base: str = "",
+    expected_history_generation: int | None = None,
 ) -> list[dict]:
     """从原始对话提炼 Semantic Memory。
 
     自动模式只处理已经结束且尚未处理的聊天日；force=True 绕过门槛。
     """
     processed_chat_day = target_chat_day
+    if expected_history_generation is None:
+        expected_history_generation = friend.online_history_generation
     if force and target_chat_day is None:
         messages = list(Message.objects.filter(
             friend=friend, create_time__gt=friend.last_reflection_time,
@@ -113,7 +116,11 @@ def reflect_memories(
             len(messages) < MIN_MESSAGES_PER_CHAT_DAY
             or total_text_length < MIN_TEXT_LENGTH_PER_CHAT_DAY
         ):
-            _mark_reflection_progress(friend, processed_chat_day)
+            _mark_reflection_progress(
+                friend,
+                processed_chat_day,
+                expected_history_generation=expected_history_generation,
+            )
             return []
 
     if not messages:
@@ -217,79 +224,124 @@ def reflect_memories(
 
     new_facts = []
     all_replaces: list[str] = []
-    locked_facts = set(SemanticMemory.objects.filter(
-        friend=friend, is_active=True
-    ).filter(
-        is_locked=True
-    ).values_list("fact", flat=True))
-    immutable_facts = set(SemanticMemory.objects.filter(
-        friend=friend, is_active=True, is_mutable=False
-    ).values_list("fact", flat=True))
-    locked_facts |= immutable_facts
+    memories_to_index: list[SemanticMemory] = []
     messages_by_id = {message.id: message for message in messages}
-    for item in extracted:
-        fact_text = str(item.get("fact", "")).strip()
-        if not fact_text:
-            continue
-        category = str(item.get("category", "preference"))
-        if category not in ("identity", "preference", "experience", "relationship"):
-            category = "preference"
-        subject = str(item.get("subject", "user"))
-        if subject not in ("user", "girlfriend", "relationship"):
-            subject = "user"
 
-        # 收集需要替换的旧事实
-        replaces = item.get("replaces")
-        if isinstance(replaces, list):
-            all_replaces.extend([str(r).strip() for r in replaces if r and str(r).strip() not in locked_facts])
+    # Serialise memory writes with clear_history(). A response produced from a
+    # cleared generation must never recreate AI-derived memories afterwards.
+    with transaction.atomic():
+        current_friend = Friend.objects.select_for_update().get(id=friend.id)
+        if current_friend.online_history_generation != expected_history_generation:
+            return []
 
-        # 处理精确冲突
-        conflicts = str(item.get("conflicts_with", "")).strip() if item.get("conflicts_with") else ""
-        if conflicts and conflicts not in locked_facts:
-            sm = resolve_conflict(friend.id, conflicts, fact_text)
-            if conflicts not in all_replaces:
-                all_replaces.append(conflicts)
-        else:
-            sm = add_fact(friend=friend, fact=fact_text, category=category,
-                          confidence=float(item.get("confidence", 0.5)),
-                          subject=subject, source="ai",
-                          evidence=(
-                              f"来自 {processed_chat_day} 的在线聊天 Reflection"
-                              if processed_chat_day else "来自在线聊天 Reflection"
-                          ),
-                          index=False)
-        evidence_ids = []
-        raw_evidence_ids = item.get("evidence_message_ids", [])
-        if isinstance(raw_evidence_ids, list):
-            for value in raw_evidence_ids:
-                try:
-                    message_id = int(value)
-                except (TypeError, ValueError):
-                    continue
-                if message_id in messages_by_id:
-                    evidence_ids.append(message_id)
-        evidence_ids = sorted(set(evidence_ids))
-        evidence_excerpt = "\n".join(
-            f"用户: {messages_by_id[message_id].user_message[:200]}\n"
-            f"AI: {messages_by_id[message_id].output[:200]}"
-            for message_id in evidence_ids[:6]
+        locked_facts = set(SemanticMemory.objects.filter(
+            friend=current_friend, is_active=True, is_locked=True
+        ).values_list("fact", flat=True))
+        locked_facts |= set(SemanticMemory.objects.filter(
+            friend=current_friend, is_active=True, is_mutable=False
+        ).values_list("fact", flat=True))
+
+        for item in extracted:
+            fact_text = str(item.get("fact", "")).strip()
+            if not fact_text:
+                continue
+            category = str(item.get("category", "preference"))
+            if category not in ("identity", "preference", "experience", "relationship"):
+                category = "preference"
+            subject = str(item.get("subject", "user"))
+            if subject not in ("user", "girlfriend", "relationship"):
+                subject = "user"
+
+            replaces = item.get("replaces")
+            if isinstance(replaces, list):
+                all_replaces.extend([
+                    str(value).strip()
+                    for value in replaces
+                    if value and str(value).strip() not in locked_facts
+                ])
+
+            conflicts = (
+                str(item.get("conflicts_with", "")).strip()
+                if item.get("conflicts_with") else ""
+            )
+            if conflicts and conflicts not in locked_facts:
+                sm = resolve_conflict(
+                    current_friend.id,
+                    conflicts,
+                    fact_text,
+                    index=False,
+                )
+                if conflicts not in all_replaces:
+                    all_replaces.append(conflicts)
+            else:
+                sm = add_fact(
+                    friend=current_friend,
+                    fact=fact_text,
+                    category=category,
+                    confidence=float(item.get("confidence", 0.5)),
+                    subject=subject,
+                    source="ai",
+                    evidence=(
+                        f"来自 {processed_chat_day} 的在线聊天 Reflection"
+                        if processed_chat_day else "来自在线聊天 Reflection"
+                    ),
+                    index=False,
+                )
+
+            evidence_ids = []
+            raw_evidence_ids = item.get("evidence_message_ids", [])
+            if isinstance(raw_evidence_ids, list):
+                for value in raw_evidence_ids:
+                    try:
+                        message_id = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if message_id in messages_by_id:
+                        evidence_ids.append(message_id)
+            evidence_ids = sorted(set(evidence_ids))
+            evidence_excerpt = "\n".join(
+                f"用户: {messages_by_id[message_id].user_message[:200]}\n"
+                f"AI: {messages_by_id[message_id].output[:200]}"
+                for message_id in evidence_ids[:6]
+            )
+            add_memory_evidence(
+                sm,
+                source_type="online_chat",
+                message_refs=evidence_ids,
+                excerpt=evidence_excerpt,
+                chat_day=processed_chat_day,
+            )
+            memories_to_index.append(sm)
+            new_facts.append({
+                "fact": sm.fact,
+                "category": sm.category,
+                "confidence": sm.confidence,
+            })
+
+        if all_replaces:
+            _archive_facts(current_friend.id, all_replaces)
+
+        _update_reflection_progress(current_friend, processed_chat_day)
+        friend.last_reflection_time = current_friend.last_reflection_time
+        friend.last_reflected_chat_day = current_friend.last_reflected_chat_day
+
+    # Index only newly created facts. Imported and manually maintained memories
+    # no longer get re-embedded after every reflection.
+    for memory in memories_to_index:
+        index_semantic_memory(memory)
+
+    # Clear may have happened after the DB transaction but before an embedding
+    # append completed. Remove any just-appended stale vectors in that case.
+    current_generation = Friend.objects.filter(id=friend.id).values_list(
+        "online_history_generation", flat=True
+    ).first()
+    if current_generation != expected_history_generation:
+        delete_semantic_index_entries(
+            friend.id,
+            [memory.id for memory in memories_to_index],
         )
-        add_memory_evidence(
-            sm,
-            source_type="online_chat",
-            message_refs=evidence_ids,
-            excerpt=evidence_excerpt,
-            chat_day=processed_chat_day,
-        )
-        new_facts.append({"fact": sm.fact, "category": sm.category, "confidence": sm.confidence})
+        return []
 
-    # 批量将被替换的旧事实转为历史状态
-    if all_replaces:
-        _archive_facts(friend.id, all_replaces)
-
-    sync_friend_memory_cache(friend)
-    rebuild_semantic_index(friend.id)
-    _mark_reflection_progress(friend, processed_chat_day)
     record_trace(
         "memory.reflection.output",
         trace_inputs,
@@ -300,18 +352,33 @@ def reflect_memories(
     return new_facts
 
 
-def _mark_reflection_progress(friend: Friend, chat_day=None):
+def _update_reflection_progress(current: Friend, chat_day=None):
+    """Update an already locked Friend row without moving progress backwards."""
+    current.last_reflection_time = now()
+    update_fields = ["last_reflection_time"]
+    if chat_day is not None and (
+        current.last_reflected_chat_day is None
+        or chat_day > current.last_reflected_chat_day
+    ):
+        current.last_reflected_chat_day = chat_day
+        update_fields.append("last_reflected_chat_day")
+    current.save(update_fields=update_fields)
+
+
+def _mark_reflection_progress(
+    friend: Friend,
+    chat_day=None,
+    *,
+    expected_history_generation: int | None = None,
+) -> bool:
     # Concurrent jobs must never move the progress marker backwards.
+    if expected_history_generation is None:
+        expected_history_generation = friend.online_history_generation
     with transaction.atomic():
         current = Friend.objects.select_for_update().get(id=friend.id)
-        current.last_reflection_time = now()
-        update_fields = ["last_reflection_time"]
-        if chat_day is not None and (
-            current.last_reflected_chat_day is None
-            or chat_day > current.last_reflected_chat_day
-        ):
-            current.last_reflected_chat_day = chat_day
-            update_fields.append("last_reflected_chat_day")
-        current.save(update_fields=update_fields)
+        if current.online_history_generation != expected_history_generation:
+            return False
+        _update_reflection_progress(current, chat_day)
         friend.last_reflection_time = current.last_reflection_time
         friend.last_reflected_chat_day = current.last_reflected_chat_day
+        return True

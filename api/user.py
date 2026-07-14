@@ -3,6 +3,7 @@ from django.contrib.auth.models import User
 from django.utils.timezone import now
 
 from api.deps import get_current_user
+from api.errors import ApiError
 from web.models.user import UserProfile
 from web.utils.photo import remove_old_photo
 from web.utils.user_profile import get_or_create_user_profile
@@ -21,8 +22,8 @@ def get_user_info(user=Depends(get_current_user)):
             "photo": user_profile.photo.url,
             "profile": user_profile.profile,
         }
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Exception as exc:
+        raise ApiError(500, "user_info_failed", "用户信息加载失败，请稍后重试", True) from exc
 
 
 @router.post("/api/user/profile/update/")
@@ -38,11 +39,11 @@ def update_profile(
         profile = profile.strip()[:500]
 
         if not username:
-            return {"result": "用户名不能为空"}
+            raise ApiError(422, "empty_username", "用户名不能为空")
         if not profile:
-            return {"result": "简介不能为空"}
+            raise ApiError(422, "empty_profile", "简介不能为空")
         if username != user.username and User.objects.filter(username=username).exists():
-            return {"result": "用户名已存在"}
+            raise ApiError(409, "username_exists", "用户名已存在")
 
         if photo and photo.filename:
             remove_old_photo(user_profile.photo)
@@ -64,5 +65,7 @@ def update_profile(
             "profile": user_profile.profile,
             "photo": user_profile.photo.url,
         }
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except ApiError:
+        raise
+    except Exception as exc:
+        raise ApiError(500, "profile_update_failed", "个人资料更新失败，请稍后重试", True) from exc

@@ -6,14 +6,17 @@ import RemoveIcon from "@/components/character/icons/RemoveIcon.vue";
 import api from "@/js/http/api.js";
 import ChatField from "@/components/character/chat_field/ChatField.vue";
 import {useRouter} from "vue-router";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 
 const props = defineProps(['character', 'canEdit', 'canRemoveFriend', 'friendId'])
 const emit = defineEmits(['remove'])
 const isHover = ref(false)
 const user = useUserStore()
 const router = useRouter()
+const actionError = ref('')
 
 async function handleRemoveCharacter() {
+  actionError.value = ''
   try {
     const res = await api.post('/api/create/character/remove/', {
       character_id: props.character.id,
@@ -22,10 +25,12 @@ async function handleRemoveCharacter() {
       emit('remove', props.character.id)
     }
   } catch (err) {
+    actionError.value = getApiErrorMessage(err, '角色删除失败，请稍后重试')
   }
 }
 
 async function handleRemoveFriend() {
+  actionError.value = ''
   try {
     const res = await api.post('/api/friend/remove/', {
       friend_id: props.friendId,
@@ -34,6 +39,7 @@ async function handleRemoveFriend() {
       emit('remove', props.friendId)
     }
   } catch (err) {
+    actionError.value = getApiErrorMessage(err, '好友删除失败，请稍后重试')
   }
 }
 
@@ -41,6 +47,7 @@ const chatFieldRef = useTemplateRef('chat-field-ref')
 const friend = ref(null)
 
 async function openChatField() {
+  actionError.value = ''
   if (!user.isLogin()) {
     await router.push({
       name: 'user-account-login-index'
@@ -56,6 +63,7 @@ async function openChatField() {
         chatFieldRef.value.showModal()
       }
     } catch (err) {
+      actionError.value = getApiErrorMessage(err, '聊天打开失败，请稍后重试')
     }
   }
 }
@@ -63,6 +71,7 @@ async function openChatField() {
 
 <template>
   <div>
+    <div v-if="actionError" class="alert alert-error mb-2 w-60 py-2 text-xs">{{ actionError }}</div>
     <div class="avatar cursor-pointer" @mouseover="isHover=true" @mouseout="isHover=false" @click="openChatField">
       <div class="w-60 h-100 rounded-2xl relative">
         <img :src="character.background_image" class="transition-transform duration-300" :class="{'scale-120': isHover}" alt="">

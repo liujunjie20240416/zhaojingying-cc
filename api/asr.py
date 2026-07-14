@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, UploadFile
 
 from ai.config import dashscope_api_key, dashscope_wss_url
 from api.deps import get_current_user
+from api.errors import ApiError
 
 router = APIRouter()
 
@@ -89,7 +90,7 @@ async def run_asr_tasks(pcm_data):
 @router.post("/api/friend/message/asr/asr/")
 async def asr(audio: UploadFile, user=Depends(get_current_user)):
     if not audio.filename:
-        return {"result": "音频不存在"}
+        raise ApiError(422, "missing_audio", "音频不存在")
     pcm_data = await audio.read()
     text = await run_asr_tasks(pcm_data)
     return {"result": "success", "text": text}

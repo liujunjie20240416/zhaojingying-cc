@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from ai.config import dashscope_api_key, dashscope_voice_url
 from api.deps import get_current_user
+from api.errors import ApiError
 from web.models.character import Voice
 
 router = APIRouter()
@@ -19,7 +20,8 @@ API_KEY = dashscope_api_key()
 def _dashscope_voice_api(action: str, **kwargs) -> dict:
     headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
     data = {"model": "voice-enrollment", "input": {"action": action, **kwargs}}
-    resp = requests.post(VOICE_URL, headers=headers, json=data)
+    resp = requests.post(VOICE_URL, headers=headers, json=data, timeout=30)
+    resp.raise_for_status()
     return resp.json()
 
 
@@ -49,7 +51,7 @@ def create_custom_voice(
         voice_id = result.get("output", {}).get("voice_id", "")
         if not voice_id:
             filepath.unlink(missing_ok=True)
-            return {"result": "failed", "detail": result}
+            raise ApiError(502, "voice_provider_rejected", "音色服务未能创建音色，请稍后重试", True)
 
         voice = Voice.objects.create(name=voice_name, voice_id=voice_id)
 
@@ -57,8 +59,10 @@ def create_custom_voice(
             "result": "success",
             "voice": {"id": voice.id, "name": voice.name, "voice_id": voice.voice_id},
         }
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except ApiError:
+        raise
+    except Exception as exc:
+        raise ApiError(502, "voice_create_failed", "音色创建失败，请稍后重试", True) from exc
 
 
 @router.get("/api/create/character/voice/custom/list/")
@@ -69,8 +73,8 @@ def list_custom_voices(user=Depends(get_current_user)):
             for v in Voice.objects.order_by("-create_time")
         ]
         return {"result": "success", "voices": voices}
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Exception as exc:
+        raise ApiError(500, "voice_list_failed", "音色列表加载失败，请稍后重试", True) from exc
 
 
 @router.post("/api/create/character/voice/custom/delete/")
@@ -82,5 +86,5 @@ def delete_custom_voice(
         _dashscope_voice_api("delete_voice", voice_id=voice_id)
         Voice.objects.filter(voice_id=voice_id).delete()
         return {"result": "success"}
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Exception as exc:
+        raise ApiError(502, "voice_delete_failed", "音色删除失败，请稍后重试", True) from exc

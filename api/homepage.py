@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from django.db.models import Q
 
 from api.deps import get_current_user
+from api.errors import ApiError
 from web.models.character import Character, Voice
 
 router = APIRouter()
@@ -40,8 +41,8 @@ def homepage_index(items_count: int = Query(...), search_query: str = Query(""))
                 }
             )
         return {"result": "success", "characters": characters}
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Exception as exc:
+        raise ApiError(500, "homepage_load_failed", "首页加载失败，请稍后重试", True) from exc
 
 
 @router.get("/api/create/character/voice/get_list/")
@@ -50,5 +51,5 @@ def get_voice_list(user=Depends(get_current_user)):
         voices_raw = Voice.objects.order_by("id")
         voices = [{"id": v.id, "name": v.name} for v in voices_raw]
         return {"result": "success", "voices": voices}
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Exception as exc:
+        raise ApiError(500, "voice_list_failed", "音色列表加载失败，请稍后重试", True) from exc

@@ -16,6 +16,7 @@ class ReflectionJob(models.Model):
 
     friend = models.ForeignKey(Friend, on_delete=models.CASCADE)
     chat_day = models.DateField()
+    history_generation = models.PositiveBigIntegerField(default=0)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     attempts = models.PositiveIntegerField(default=0)
     locked_at = models.DateTimeField(null=True, blank=True)

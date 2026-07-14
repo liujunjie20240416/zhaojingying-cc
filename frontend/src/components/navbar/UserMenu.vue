@@ -4,13 +4,17 @@ import UserSpaceIcon from "@/components/navbar/icons/UserSpaceIcon.vue";
 import UserLogoutIcon from "@/components/navbar/icons/UserLogoutIcon.vue";
 import api from "@/js/http/api.js";
 import router from "@/router/index.js";
+import {ref} from "vue";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 
 const user=useUserStore()
+const logoutError=ref('')
 function closeMenu() {
   const element = document.activeElement
   if (element && element instanceof HTMLElement) element.blur()
 }
 async function handleLogout(){
+  logoutError.value=''
   try{
     const res=await api.post('/api/user/account/logout/')
     if(res.data.result==='success'){
@@ -20,7 +24,7 @@ async function handleLogout(){
       })
     }
   }catch(err){
-
+    logoutError.value=getApiErrorMessage(err, '退出失败，请稍后重试')
   }
 }
 
@@ -34,6 +38,7 @@ async function handleLogout(){
     </div>
   </div>
   <ul tabindex="-1" class="dropdown-content menu bg-base-100 rounded-box z-1 w-40 p-2 shadow-lg">
+    <li v-if="logoutError" class="px-2 py-1 text-xs text-error">{{ logoutError }}</li>
     <li>
       <RouterLink @click="closeMenu" :to="{name:'user-space-index',params:{user_id:user.id}}">
         <div class="avatar">

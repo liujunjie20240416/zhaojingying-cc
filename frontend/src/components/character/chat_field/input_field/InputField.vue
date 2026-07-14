@@ -4,14 +4,15 @@ import MicIcon from "@/components/character/icons/MicIcon.vue";
 import {onUnmounted, ref, useTemplateRef} from "vue";
 import streamApi from "@/js/http/streamApi.js";
 import api from "@/js/http/api.js";
-import CONFIG_API from "@/js/config/config.js";
 import Microphone from "@/components/character/chat_field/input_field/Microphone.vue";
 import {detectUserEmojiContext} from "@/js/utils/emotionEmoji.js";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 const props = defineProps(['friendId'])
 const emit = defineEmits(['pushBackMessage','addToLastMessage','setLastMessageBubbles','connectionOnline','connectionError','typingFinished'])
 const inputRef = useTemplateRef('input-ref')
 const message=ref('')
 let processId = 0
+let streamAbortController = null
 const showMic = ref(false)
 let audioPreparedForNextResponse = false
 const imageInputRef = useTemplateRef('image-input-ref')
@@ -19,10 +20,6 @@ const pendingImages = ref([])
 const uploading = ref(false)
 const uploadError = ref('')
 
-function absoluteMediaUrl(url) {
-  if (!url || /^https?:\/\//.test(url)) return url
-  return `${CONFIG_API.HTTP_URL || ''}${url}`
-}
 function chooseImages(){ imageInputRef.value?.click() }
 function handleImageSelection(event){
   uploadError.value = ''
@@ -44,7 +41,7 @@ async function uploadImages(){
     form.append('friend_id',props.friendId)
     form.append('file',item.file)
     const response=await api.post('/api/friend/message/attachment/upload/',form)
-    uploaded.push({...response.data.attachment,url:absoluteMediaUrl(response.data.attachment.url)})
+    uploaded.push(response.data.attachment)
   }
   return uploaded
 }
@@ -115,6 +112,7 @@ const stopAudio = () => {
             try {
                 mediaSource.endOfStream();
             } catch (e) {
+                // The stream may already have closed while the modal was shutting down.
             }
         }
         mediaSource = null;
@@ -144,6 +142,7 @@ const handleAudioChunk = (base64Data) => {  // 将语音片段添加到播放器
 };
 
 onUnmounted(() => {
+    cancelCurrentRequest()
     audioPlayer.pause();
     audioPlayer.src = '';
     pendingImages.value.forEach(item => URL.revokeObjectURL(item.preview))
@@ -169,7 +168,7 @@ async function handleSend(event,audio_msg){
   try{
     attachments=await uploadImages()
   }catch(error){
-    uploadError.value=error.response?.data?.detail || '图片上传失败，请重试'
+    uploadError.value=getApiErrorMessage(error, '图片上传失败，请重试')
     uploading.value=false
     return
   }
@@ -183,8 +182,11 @@ async function handleSend(event,audio_msg){
   emit('connectionOnline')
   emit('pushBackMessage',{role:'user',content:content,attachments,id:crypto.randomUUID(),createdAt})
   emit('pushBackMessage',{role:'ai',content:'',id:crypto.randomUUID(),createdAt,isTyping:true})
-    try {
+  const controller = new AbortController()
+  streamAbortController = controller
+  try {
     await streamApi('/api/friend/message/chat/', {
+      signal: controller.signal,
       body: {
         friend_id: props.friendId,
         message: content,
@@ -210,19 +212,27 @@ async function handleSend(event,audio_msg){
         }
       },
       onerror(err) {
-        emit('connectionError')
+        if (err?.name !== 'AbortError') emit('connectionError')
       },
     })
   } catch (err) {
-    emit('connectionError')
+    if (err?.name !== 'AbortError') emit('connectionError')
+  } finally {
+    if (streamAbortController === controller) streamAbortController = null
   }
 }
 function focus(){
   inputRef.value.focus()
 }
 function close() {
-  ++ processId
+  cancelCurrentRequest()
   showMic.value = false
+}
+
+function cancelCurrentRequest() {
+  ++ processId
+  streamAbortController?.abort()
+  streamAbortController = null
   audioPreparedForNextResponse = false
   stopAudio()
 }
@@ -242,9 +252,7 @@ function closeMicrophone() {
 }
 
 function handleStop() {
-  ++ processId
-  audioPreparedForNextResponse = false
-  stopAudio()
+  cancelCurrentRequest()
 }
 
 
@@ -252,6 +260,7 @@ defineExpose(
     {
       focus,
       close,
+      cancelCurrentRequest,
     }
 )
 </script>

@@ -2,11 +2,13 @@
 import {nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef} from "vue";
 import Character from "@/components/character/Character.vue";
 import api from "@/js/http/api.js";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 
 const friends = ref([])
 const isLoading = ref(false)
 const hasFriends = ref(true)
 const sentinelRef = useTemplateRef('sentinel-ref')
+const loadError = ref('')
 
 function checkSentinelVisible() {  // 判断哨兵是否能被看到
   if (!sentinelRef.value) return false
@@ -18,6 +20,7 @@ function checkSentinelVisible() {  // 判断哨兵是否能被看到
 async function loadMore() {
   if (isLoading.value || !hasFriends.value) return
   isLoading.value = true
+  loadError.value = ''
 
   let newFriends = []
   try {
@@ -31,6 +34,7 @@ async function loadMore() {
       newFriends = data.friends
     }
   } catch (err) {
+    loadError.value = getApiErrorMessage(err, '聊天列表加载失败，请稍后重试')
   } finally {
     isLoading.value = false
     if (newFriends.length === 0) {
@@ -76,6 +80,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex flex-col items-center mb-12">
+    <div v-if="loadError" class="alert alert-error mt-4 w-[calc(100%-1.5rem)] max-w-xl text-sm">{{ loadError }}</div>
     <div class="grid w-full grid-cols-1 justify-items-center gap-6 px-3 mt-6 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))] sm:gap-9 sm:px-9 sm:mt-12">
       <Character
         v-for="friend in friends"

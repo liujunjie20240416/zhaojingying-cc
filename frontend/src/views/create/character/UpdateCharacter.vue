@@ -11,6 +11,7 @@ import {useUserStore} from "@/stores/user.js";
 import api from "@/js/http/api.js";
 import Voice from "@/views/create/character/components/Voice.vue";
 import WechatImport from "@/views/create/character/components/WechatImport.vue";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 
 const user = useUserStore()
 const router = useRouter()
@@ -34,7 +35,7 @@ async function loadCharacter(){
       curVoiceId.value = data.character.voice_id
     }
   }catch(err){
-    errorMessage.value = '角色信息加载失败，请稍后重试'
+    errorMessage.value = getApiErrorMessage(err, '角色信息加载失败，请稍后重试')
   }
 }
 
@@ -93,7 +94,7 @@ async function handleUpdate(){
         errorMessage.value=data.result
       }
     }catch(err){
-
+      errorMessage.value = getApiErrorMessage(err, '角色更新失败，请稍后重试')
     }
   }
 

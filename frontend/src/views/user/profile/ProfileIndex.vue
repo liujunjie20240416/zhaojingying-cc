@@ -7,6 +7,7 @@ import {useUserStore} from "@/stores/user.js";
 import {ref, useTemplateRef} from "vue";
 import {base64ToFile} from "@/js/utils/base64_to_file.js";
 import api from "@/js/http/api.js";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 
 const user=useUserStore()
 
@@ -43,7 +44,7 @@ async function handleUpdate(){
         errorMessage.value=data.result
       }
     }catch (err){
-
+      errorMessage.value = getApiErrorMessage(err, '个人资料更新失败，请稍后重试')
     }
   }
 }

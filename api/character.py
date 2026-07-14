@@ -5,6 +5,7 @@ from django.utils.timezone import now as djnow
 from pathlib import Path
 
 from api.deps import get_current_user
+from api.errors import ApiError
 from api.schemas import RemoveCharacterRequest, UpdateImportedMemoryVisibilityRequest
 from ai.memory.import_access import set_imported_context_visibility
 from web.models.character import Character, Voice
@@ -49,13 +50,13 @@ def create_character(
         profile = profile.strip()[:100000]
 
         if not name:
-            return {"result": "名字不能为空"}
+            raise ApiError(422, "empty_character_name", "名字不能为空")
         if not profile:
-            return {"result": "角色介绍不能为空"}
+            raise ApiError(422, "empty_character_profile", "角色介绍不能为空")
         if not photo.filename:
-            return {"result": "头像不能为空"}
+            raise ApiError(422, "missing_character_photo", "头像不能为空")
         if not background_image.filename:
-            return {"result": "聊天背景不能为空"}
+            raise ApiError(422, "missing_character_background", "聊天背景不能为空")
 
         voice = Voice.objects.get(id=voice_id)
         character = Character(
@@ -70,8 +71,12 @@ def create_character(
         )
         character.save()
         return {"result": "success", "character_id": character.id}
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except ApiError:
+        raise
+    except Voice.DoesNotExist as exc:
+        raise ApiError(422, "voice_not_found", "所选音色不存在") from exc
+    except Exception as exc:
+        raise ApiError(500, "character_create_failed", "角色创建失败，请稍后重试", True) from exc
 
 
 @router.post("/api/create/character/update/")
@@ -90,9 +95,9 @@ def update_character(
         profile = profile.strip()[:100000]
 
         if not name:
-            return {"result": "名字不能为空"}
+            raise ApiError(422, "empty_character_name", "名字不能为空")
         if not profile:
-            return {"result": "角色介绍不能为空"}
+            raise ApiError(422, "empty_character_profile", "角色介绍不能为空")
 
         if photo and photo.filename:
             remove_old_photo(character.photo)
@@ -110,8 +115,14 @@ def update_character(
         character.update_time = djnow()
         character.save()
         return {"result": "success"}
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except ApiError:
+        raise
+    except Character.DoesNotExist as exc:
+        raise ApiError(404, "character_not_found", "角色不存在或不属于你") from exc
+    except Voice.DoesNotExist as exc:
+        raise ApiError(422, "voice_not_found", "所选音色不存在") from exc
+    except Exception as exc:
+        raise ApiError(500, "character_update_failed", "角色更新失败，请稍后重试", True) from exc
 
 
 @router.post("/api/create/character/remove/")
@@ -124,8 +135,10 @@ def remove_character(data: RemoveCharacterRequest, user=Depends(get_current_user
         character.delete()
         _remove_import_artifacts(character_id)
         return {"result": "success"}
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Character.DoesNotExist as exc:
+        raise ApiError(404, "character_not_found", "角色不存在或不属于你") from exc
+    except Exception as exc:
+        raise ApiError(500, "character_remove_failed", "角色删除失败，请稍后重试", True) from exc
 
 
 @router.post("/api/create/character/imported-memory-visibility/")
@@ -140,12 +153,12 @@ def update_imported_memory_visibility(
             "result": "success",
             "visibility": character.imported_memory_visibility,
         }
-    except Character.DoesNotExist:
-        return {"result": "角色不存在或不属于你"}
+    except Character.DoesNotExist as exc:
+        raise ApiError(404, "character_not_found", "角色不存在或不属于你") from exc
     except ValueError as exc:
-        return {"result": str(exc)}
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+        raise ApiError(422, "invalid_import_visibility", str(exc)) from exc
+    except Exception as exc:
+        raise ApiError(500, "visibility_update_failed", "记忆可见性更新失败，请稍后重试", True) from exc
 
 
 @router.get("/api/create/character/get_single/")
@@ -154,24 +167,24 @@ def get_single_character(
 ):
     try:
         character = Character.objects.get(id=character_id, author__user=user)
-        voices_raw = Voice.objects.order_by("id")
-        voices = [{"id": v.id, "name": v.name} for v in voices_raw]
-        return {
-            "result": "success",
-            "character": {
-                "id": character.id,
-                "name": character.name,
-                "profile": character.profile,
-                "photo": character.photo.url,
-                "background_image": character.background_image.url,
-                "voice_id": character.voice_id,
-                "style_profile": character.style_profile,
-                "imported_memory_visibility": character.imported_memory_visibility,
-            },
-            "voices": voices,
-        }
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Character.DoesNotExist as exc:
+        raise ApiError(404, "character_not_found", "角色不存在或不属于你") from exc
+    voices_raw = Voice.objects.order_by("id")
+    voices = [{"id": v.id, "name": v.name} for v in voices_raw]
+    return {
+        "result": "success",
+        "character": {
+            "id": character.id,
+            "name": character.name,
+            "profile": character.profile,
+            "photo": character.photo.url,
+            "background_image": character.background_image.url,
+            "voice_id": character.voice_id,
+            "style_profile": character.style_profile,
+            "imported_memory_visibility": character.imported_memory_visibility,
+        },
+        "voices": voices,
+    }
 
 
 @router.get("/api/create/character/get_list/")
@@ -211,5 +224,5 @@ def get_list_character(items_count: int = Query(...), user_id: int = Query(...))
             },
             "characters": characters,
         }
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except Exception as exc:
+        raise ApiError(500, "character_list_failed", "角色列表加载失败，请稍后重试", True) from exc

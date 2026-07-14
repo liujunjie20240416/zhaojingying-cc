@@ -14,6 +14,7 @@ class Friend(models.Model):
     conversation_summary = models.TextField(default="", blank=True, max_length=2000)
     summary_through_message_id = models.PositiveBigIntegerField(null=True, blank=True)
     summary_updated_at = models.DateTimeField(null=True, blank=True)
+    online_history_generation = models.PositiveBigIntegerField(default=0)
     last_reflection_time = models.DateTimeField(default=now)
     last_reflected_chat_day = models.DateField(null=True, blank=True)
     create_time = models.DateTimeField(default=now)

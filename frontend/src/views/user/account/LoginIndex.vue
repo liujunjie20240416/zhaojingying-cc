@@ -4,6 +4,7 @@ import {useUserStore} from "@/stores/user.js";
 import {useRouter} from "vue-router";
 import api from "@/js/http/api.js";
 import DynamicBackground from "@/components/background/DynamicBackground.vue";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 
 const username = ref('')
 const password = ref('')
@@ -37,7 +38,7 @@ async function handleLogin(){
         errorMessage.value=data.result
       }
     }catch (err){
-
+      errorMessage.value = getApiErrorMessage(err, '登录失败，请稍后重试')
     }
   }
 }

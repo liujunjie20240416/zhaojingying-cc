@@ -11,6 +11,8 @@
 import axios from "axios"
 import {useUserStore} from "@/stores/user.js";
 import CONFIG_API from "@/js/config/config.js";
+import {getApiError} from "@/js/http/errors.js";
+import {createTokenRefresher} from "@/js/http/tokenRefresh.js";
 
 const BASE_URL = CONFIG_API.HTTP_URL
 
@@ -27,65 +29,54 @@ api.interceptors.request.use(config => {
     return config
 })
 
-let isRefreshing = false
-let refreshSubscribers = []
+let tokenRefresher = null
 
-function subscribeTokenRefresh(callback) {
-    refreshSubscribers.push(callback)
+function getTokenRefresher() {
+    if (!tokenRefresher) {
+        const user = useUserStore()
+        tokenRefresher = createTokenRefresher({
+            requestRefresh: async () => {
+                const response = await axios.post(
+                    `${BASE_URL}/api/user/account/refresh_token/`,
+                    {},
+                    {withCredentials: true, timeout: 5000},
+                )
+                return response.data
+            },
+            applyToken: token => user.setAccessToken(token),
+            onFailure: () => user.logout(),
+        })
+    }
+    return tokenRefresher
 }
 
-function onRefreshed(token) {
-    refreshSubscribers.forEach(cb => cb(token))
-    refreshSubscribers = []
-}
-
-function onRefreshFailed(err) {
-    refreshSubscribers.forEach(cb => cb(null, err))
-    refreshSubscribers = []
+export function refreshAccessToken() {
+    return getTokenRefresher()()
 }
 
 api.interceptors.response.use(
     response => response,
     async error => {
-        const user = useUserStore()
         const originalRequest = error?.config
         if (!originalRequest) {
             return Promise.reject(error)
         }
 
-        if (error.response?.status === 401 && !originalRequest._retry) {
+        const hasAccessToken = Boolean(originalRequest.headers?.Authorization)
+        const isRefreshRequest = originalRequest.url?.includes('/api/user/account/refresh_token/')
+        if (error.response?.status === 401 && hasAccessToken && !isRefreshRequest && !originalRequest._retry) {
             originalRequest._retry = true
 
-            return new Promise((resolve, reject) => {
-                subscribeTokenRefresh((token, error) => {
-                    if (error) {
-                        reject(error)
-                    } else {
-                        originalRequest.headers.Authorization = `Bearer ${token}`
-                        resolve(api(originalRequest))
-                    }
-                })
-
-                if (!isRefreshing) {
-                    isRefreshing = true
-                    axios.post(
-                        `${BASE_URL}/api/user/account/refresh_token/`,
-                        {},
-                        {withCredentials: true, timeout: 5000}
-                    ).then(res => {
-                        user.setAccessToken(res.data.access)
-                        onRefreshed(res.data.access)
-                    }).catch(error => {
-                        user.logout()
-                        onRefreshFailed(error)
-                        reject(error)
-                    }).finally(() => {
-                        isRefreshing = false
-                    })
-                }
-            })
+            try {
+                const token = await refreshAccessToken()
+                originalRequest.headers.Authorization = `Bearer ${token}`
+                return api(originalRequest)
+            } catch (refreshError) {
+                return Promise.reject(refreshError)
+            }
         }
 
+        error.apiError = getApiError(error)
         return Promise.reject(error)
     }
 )

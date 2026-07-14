@@ -6,6 +6,7 @@ import {useUserStore} from "@/stores/user.js";
 import {useRoute, useRouter} from "vue-router";
 import {onMounted} from "vue";
 import api from "@/js/http/api.js";
+import {getApiError} from "@/js/http/errors.js";
 
 const user = useUserStore()
 const route=useRoute()
@@ -20,7 +21,8 @@ onMounted(async ()=>{
       user.setUserInfo(data)
     }
   }catch(err){
-
+    const apiError = getApiError(err)
+    if (apiError.status !== 401) console.error('用户状态加载失败:', apiError.message)
   }finally{
     user.setHasPulledUserInfo(true)
     if(route.meta.needLogin && !user.isLogin()){

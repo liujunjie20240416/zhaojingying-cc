@@ -17,6 +17,7 @@ from langchain_community.vectorstores import LanceDB
 
 from ai.custom_embeddings import CustomEmbeddings
 from api.deps import get_current_user
+from api.errors import ApiError
 from api.schemas import ResumeImportRequest
 from web.models.character import Character
 from web.models.chat_message import ChatMessage
@@ -59,8 +60,8 @@ def import_wechat(
     """
     try:
         character = Character.objects.get(id=character_id, author__user=user)
-    except Character.DoesNotExist:
-        return {"result": "角色不存在或不属于你"}
+    except Character.DoesNotExist as exc:
+        raise ApiError(404, "character_not_found", "角色不存在或不属于你") from exc
 
     # 保存发送人映射
     character.chat_sender_name = target_name.strip()
@@ -68,8 +69,11 @@ def import_wechat(
 
     raw = file.file.read()
     if not raw:
-        return {"result": "文件为空"}
-    content = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        raise ApiError(422, "empty_import_file", "文件为空")
+    try:
+        content = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+    except UnicodeDecodeError as exc:
+        raise ApiError(415, "invalid_import_encoding", "聊天文件必须使用 UTF-8 编码") from exc
 
     suffix = Path(file.filename or "chat.txt").suffix or ".txt"
     with tempfile.NamedTemporaryFile(
@@ -86,7 +90,11 @@ def import_wechat(
             filter_noise=True,
         )
         if not messages:
-            return {"result": "未解析到任何有效消息，请检查文件格式和 target_name"}
+            raise ApiError(
+                422,
+                "no_import_messages",
+                "未解析到任何有效消息，请检查文件格式和 target_name",
+            )
 
         # ── 1. 存入 LanceDB（语义向量） ──
         chunks = format_output_as_chunks(messages, target_name, chunk_size=40)
@@ -197,9 +205,9 @@ def resume_import(data: ResumeImportRequest, user=Depends(get_current_user)):
     """Continue preprocessing from successful Map checkpoints without re-uploading."""
     character = Character.objects.filter(id=data.character_id, author__user=user).first()
     if not character:
-        return {"result": "角色不存在或不属于你"}
+        raise ApiError(404, "character_not_found", "角色不存在或不属于你")
     if not ChatMessage.objects.filter(character_id=data.character_id).exists():
-        return {"result": "没有可恢复的聊天原文，请先导入聊天记录"}
+        raise ApiError(409, "import_not_resumable", "没有可恢复的聊天原文，请先导入聊天记录")
 
     started = _start_preprocessing(data.character_id)
     return {
@@ -215,7 +223,7 @@ def import_status(character_id: int = Query(...), user=Depends(get_current_user)
     try:
         character = Character.objects.filter(id=character_id, author__user=user).first()
         if not character:
-            return {"result": "角色不存在或不属于你"}
+            raise ApiError(404, "character_not_found", "角色不存在或不属于你")
 
         analysis = ImportAnalysis.objects.filter(character_id=character_id).first()
         if not analysis:
@@ -242,5 +250,7 @@ def import_status(character_id: int = Query(...), user=Depends(get_current_user)
                     analysis.completed_chunks / analysis.total_chunks * 95
                 ) if analysis.total_chunks else 0
         return resp
-    except Exception:
-        return {"result": "系统异常，请稍后重试"}
+    except ApiError:
+        raise
+    except Exception as exc:
+        raise ApiError(500, "import_status_failed", "导入状态加载失败，请稍后重试", True) from exc

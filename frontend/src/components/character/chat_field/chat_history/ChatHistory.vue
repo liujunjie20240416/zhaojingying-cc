@@ -1,9 +1,10 @@
 <script setup>
 
 import Message from "@/components/character/chat_field/chat_history/message/Message.vue";
-import {computed, nextTick, onBeforeUnmount, onMounted, useTemplateRef} from "vue";
+import {computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef} from "vue";
 import api from "@/js/http/api.js";
 import {formatChatTime, shouldShowTime} from "@/js/utils/chatTime.js";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 const props=defineProps(['history','friendId','character'])
 const scrollRef = useTemplateRef('scroll-ref')
 const sentinelRef = useTemplateRef('sentinel-ref')
@@ -11,6 +12,7 @@ const emit = defineEmits(['pushFrontMessage'])
 let isLoading = false
 let hasMessages = true
 let lastMessageId = 0
+const loadError = ref('')
 
 const displayItems = computed(() => {
   const items = []
@@ -51,6 +53,7 @@ function checkSentinelVisible() {  // 判断哨兵是否能被看到
 async function loadMore(){
   if(isLoading||!hasMessages) return
   isLoading=true
+  loadError.value=''
   let newMessages=[]
   try{
     const res = await api.get('/api/friend/message/get_history/',{
@@ -64,7 +67,7 @@ async function loadMore(){
       newMessages=data.messages
     }
   }catch(err){
-
+    loadError.value=getApiErrorMessage(err, '聊天记录加载失败，请稍后重试')
   }finally{
     isLoading=false
     if(newMessages.length===0){
@@ -135,6 +138,7 @@ defineExpose({
 
 <template>
  <div ref="scroll-ref" class="chat-history absolute overflow-y-scroll no-scrollbar">
+   <div v-if="loadError" class="mx-3 my-2 rounded-lg bg-error/85 px-3 py-2 text-xs text-error-content">{{ loadError }}</div>
    <div ref="sentinel-ref" class="h-2 "></div>
    <template v-for="item in displayItems" :key="item.id">
      <div v-if="item.type === 'time'" class="chat-time-separator">

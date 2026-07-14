@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test tests/*.test.js",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -12,7 +13,7 @@
     "@microsoft/fetch-event-source": "^2.0.1",
     "@ricky0123/vad-web": "^0.0.30",
     "@tailwindcss/vite": "^4.1.18",
-    "axios": "^1.13.2",
+    "axios": "^1.18.1",
     "croppie": "^2.6.5",
     "lucide-vue-next": "^1.0.0",
     "pinia": "^3.0.4",
@@ -23,7 +24,7 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.3",
     "daisyui": "^5.5.14",
-    "vite": "^7.3.1",
+    "vite": "^7.3.6",
     "vite-plugin-vue-devtools": "^8.0.5"
   },
   "engines": {

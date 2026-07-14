@@ -5,6 +5,7 @@ import {useUserStore} from "@/stores/user.js";
 import api from "@/js/http/api.js";
 import {useRouter} from "vue-router";
 import DynamicBackground from "@/components/background/DynamicBackground.vue";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 
 const username=ref('')
 const password = ref('')
@@ -43,7 +44,7 @@ async function handleRegister(){
       }
 
     }catch(err){
-
+      errorMessage.value = getApiErrorMessage(err, '注册失败，请稍后重试')
     }
   }
 }

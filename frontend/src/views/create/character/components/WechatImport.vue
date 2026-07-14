@@ -1,6 +1,7 @@
 <script setup>
 import {onMounted, onUnmounted, ref, watch} from "vue";
 import api from "@/js/http/api.js";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 
 const props = defineProps({
   characterId: {type: [Number, String], required: true},
@@ -49,7 +50,7 @@ async function setVisibility(nextVisibility) {
     emit('visibilityChanged', visibility.value)
   } catch (err) {
     visibility.value = previous
-    privacyMessage.value = err.message || '隐私设置保存失败'
+    privacyMessage.value = getApiErrorMessage(err, '隐私设置保存失败')
   } finally {
     savingVisibility.value = false
   }
@@ -132,9 +133,10 @@ async function pollImportStatus() {
     }
   } catch (err) {
     preprocessing.value = false
-    message.value = err.response
-      ? '预处理状态查询失败，请稍后重试'
-      : '无法连接后端服务，请确认 API 服务已在 127.0.0.1:8000 启动'
+    message.value = getApiErrorMessage(
+      err,
+      '无法连接后端服务，请确认 API 服务已在 127.0.0.1:8000 启动',
+    )
     isSuccess.value = false
     stopPolling()
   }
@@ -186,7 +188,7 @@ async function handleImport() {
       isSuccess.value = false
     }
   } catch (err) {
-    message.value = '导入失败，请重试'
+    message.value = getApiErrorMessage(err, '导入失败，请重试')
     isSuccess.value = false
   } finally {
     uploading.value = false
@@ -210,7 +212,7 @@ async function handleResume() {
     preprocessing.value = true
     startPolling()
   } catch (err) {
-    message.value = '恢复失败，请稍后重试'
+    message.value = getApiErrorMessage(err, '恢复失败，请稍后重试')
     isSuccess.value = false
     canResume.value = true
   }

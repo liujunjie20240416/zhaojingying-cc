@@ -44,4 +44,47 @@ def test_upload_chat_image_uses_safe_sync_django_boundary(settings, tmp_path):
     assert payload["attachment"]["mime_type"] == "image/webp"
     assert payload["attachment"]["width"] == 32
     assert payload["attachment"]["height"] == 24
+    assert payload["attachment"]["url"] == (
+        f"/api/friend/message/attachment/{payload['attachment']['id']}/content/"
+    )
     assert MessageAttachment.objects.filter(friend=friend).count() == 1
+
+    attachment_url = payload["attachment"]["url"]
+    with TestClient(app, raise_server_exceptions=False) as client:
+        anonymous = client.get(attachment_url)
+        owner = client.get(
+            attachment_url,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        other_user = User.objects.create_user(username="other-image-user")
+        UserProfile.objects.create(user=other_user)
+        other_token = str(AccessToken.for_user(other_user))
+        other = client.get(
+            attachment_url,
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+
+    assert anonymous.status_code == 401
+    assert other.status_code == 404
+    assert owner.status_code == 200
+    assert owner.headers["content-type"] == "image/webp"
+    assert owner.headers["cache-control"] == "private, no-store"
+    assert owner.content
+
+
+def test_static_media_blocks_private_chat_image_paths(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from main import PublicMediaStaticFiles
+
+    (tmp_path / "chat_images").mkdir()
+    (tmp_path / "chat_images" / "private.webp").write_bytes(b"private")
+    (tmp_path / "public.txt").write_text("public", encoding="utf-8")
+    static_app = FastAPI()
+    static_app.mount("/media", PublicMediaStaticFiles(directory=tmp_path))
+
+    with TestClient(static_app) as client:
+        assert client.get("/media/chat_images/private.webp").status_code == 404
+        assert client.get("/media/public.txt").text == "public"

@@ -11,6 +11,7 @@ import {useUserStore} from "@/stores/user.js";
 import api from "@/js/http/api.js";
 import Voice from "@/views/create/character/components/Voice.vue";
 import WechatImport from "@/views/create/character/components/WechatImport.vue";
+import {getApiErrorMessage} from "@/js/http/errors.js";
 
 
 const user = useUserStore()
@@ -78,7 +79,7 @@ async function handleCreate(){
         errorMessage.value=data.result
       }
     }catch(err){
-
+      errorMessage.value = getApiErrorMessage(err, '角色创建失败，请稍后重试')
     }
   }
 
