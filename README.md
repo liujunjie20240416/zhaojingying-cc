@@ -1,4 +1,4 @@
-# 赵晶莹 · Memory-Driven AI Companion
+# 千寻 · Memory-Driven AI Companion
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.136+-009688.svg)](https://fastapi.tiangolo.com/)
@@ -289,10 +289,8 @@ LLM_API_KEY=""
 LLM_API_BASE="https://api.deepseek.com/v1"
 LLM_MODEL="deepseek-v4-pro"
 
-GLM_API_KEY=""
-GLM_API_BASE="https://open.bigmodel.cn/api/paas/v4"
-GLM_MODEL="glm-5.2"
-
+VISION_LLM_API_KEY=""
+VISION_LLM_API_BASE="https://open.bigmodel.cn/api/paas/v4"
 VISION_LLM_MODEL="glm-5v-turbo"
 
 DASHSCOPE_API_KEY=""
@@ -300,7 +298,7 @@ DASHSCOPE_API_BASE="https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_WSS_URL="wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 ```
 
-所有非视觉生成任务（对话、预处理、摘要、记忆反思、意图分类和 RAG 辅助）使用 `LLM_*` —— 这是与厂商无关的通用名，`LLM_API_BASE` 指向哪个 OpenAI 兼容地址就调用哪家（DeepSeek、Kimi、通义、GLM 均可，只需改 base/key/model 三个值；旧配置 `DEEPSEEK_*` 仍作为兼容回退生效）。用户发送图片时，Conversation Agent 改用 `VISION_LLM_*`（默认复用 `GLM_*`）。DashScope 密钥仅用于 Embedding、ASR、TTS 和音色服务。
+所有非视觉生成任务（对话、预处理、摘要、记忆反思、意图分类和 RAG 辅助）使用 `LLM_*` —— 这是与厂商无关的通用名，`LLM_API_BASE` 指向哪个 OpenAI 兼容地址就调用哪家（DeepSeek、Kimi、通义、GLM 均可，只需改 base/key/model 三个值；旧配置 `DEEPSEEK_*` 仍作为兼容回退生效）。用户发送图片时，Conversation Agent 改用 `VISION_LLM_*`（图片理解走智谱 GLM，旧 `GLM_API_KEY` 仅作为视觉密钥的兼容回退）。DashScope 密钥仅用于 Embedding、ASR、TTS 和音色服务。
 
 可选：上下文预算可通过环境变量覆盖（见 `.env.example` 注释），例如 `CONTEXT_WORKING_HISTORY_TOKENS`（折叠触发阈值，默认 9000）、`CONTEXT_SOFT_INPUT_TOKENS` / `CONTEXT_HARD_INPUT_TOKENS`（输入上下文软/硬上限，默认 32K / 40K）、`CONTEXT_SUMMARY_TOKENS`（工作摘要上限，默认 1800）。
 
