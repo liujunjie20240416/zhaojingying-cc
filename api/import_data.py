@@ -36,14 +36,54 @@ _STORAGE_DIR = str(
 
 
 def _ensure_fts5_table(character_id: int):
-    """为指定角色创建 FTS5 虚拟表（如果不存在）"""
+    """为指定角色创建 FTS5 虚拟表（如果不存在）。
+
+    tokens 列存 jieba 分词结果（空格连接）：unicode61 不切中文，整段中文是
+    一个 token，MATCH "生日" 永远为空；分词后查询侧 jieba 切出的词才能命中。
+    """
     table_name = f"chat_fts_{character_id}"
     with connection.cursor() as c:
         c.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS "{table_name}"
-            USING fts5(sender, content, timestamp, tokenize='unicode61')
+            USING fts5(sender, content, timestamp, tokens, tokenize='unicode61')
         """)
     return table_name
+
+
+def _tokenize_chinese(text: str) -> str:
+    """jieba 分词（空格连接），供 FTS5 tokens 列使用"""
+    import jieba
+    return " ".join(word for word in jieba.cut(text or "") if word.strip())
+
+
+def _sync_fts5_table(character_id: int) -> str:
+    """从 chat_message 全量重建 FTS5 投影（含 jieba 分词列）。
+
+    chat_message 是权威源；FTS 表只是关键词检索的派生缓存，可随时重建。
+    先 DROP 旧表：存量表可能是无 tokens 列的单列结构，IF NOT EXISTS 不会升级。
+    """
+    fts_table = f"chat_fts_{character_id}"
+    with connection.cursor() as c:
+        c.execute(f'DROP TABLE IF EXISTS "{fts_table}"')
+    _ensure_fts5_table(character_id)
+    rows = list(
+        ChatMessage.objects.filter(character_id=character_id).order_by("id").values_list(
+            "id", "sender", "content", "timestamp"
+        )
+    )
+    with connection.cursor() as c:
+        c.execute(f'DELETE FROM "{fts_table}"')
+        for start in range(0, len(rows), 500):
+            batch = rows[start:start + 500]
+            c.executemany(
+                f'INSERT INTO "{fts_table}" '
+                f"(rowid, sender, content, timestamp, tokens) VALUES (?, ?, ?, ?, ?)",
+                [
+                    (row_id, sender, content, timestamp, _tokenize_chinese(content))
+                    for row_id, sender, content, timestamp in batch
+                ],
+            )
+    return fts_table
 
 
 @router.post("/api/import/wechat/")
@@ -115,8 +155,6 @@ def import_wechat(
 
         # 清空旧数据
         ChatMessage.objects.filter(character_id=character_id).delete()
-        with connection.cursor() as c:
-            c.execute(f'DELETE FROM "{fts_table}"')
 
         # 批量插入 ChatMessage（每 500 条一批）
         batch: list[ChatMessage] = []
@@ -134,13 +172,8 @@ def import_wechat(
         if batch:
             ChatMessage.objects.bulk_create(batch)
 
-        # 同步到 FTS5：INSERT INTO fts_table SELECT FROM chat_message
-        with connection.cursor() as c:
-            c.execute(f"""
-                INSERT INTO "{fts_table}" (rowid, sender, content, timestamp)
-                SELECT id, sender, content, timestamp FROM chat_message
-                WHERE character_id = {character_id}
-            """)
+        # 同步到 FTS5：chat_message → FTS 表（jieba 分词写入 tokens 列）
+        _sync_fts5_table(character_id)
 
         # ── 触发异步预处理 ──
         _start_preprocessing(character_id)
