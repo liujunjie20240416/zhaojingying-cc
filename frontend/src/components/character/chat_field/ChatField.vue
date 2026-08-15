@@ -4,6 +4,7 @@ import InputField from "@/components/character/chat_field/input_field/InputField
 import CharacterPhotoField from "@/components/character/chat_field/character_photo_field/CharacterPhotoField.vue";
 import ChatHistory from "@/components/character/chat_field/chat_history/ChatHistory.vue";
 import MemoryManager from "@/components/character/chat_field/MemoryManager.vue";
+import ContextMonitor from "@/components/character/chat_field/ContextMonitor.vue";
 import RemoveIcon from "@/components/character/icons/RemoveIcon.vue";
 import api from "@/js/http/api.js";
 import {getApiErrorMessage} from "@/js/http/errors.js";
@@ -15,28 +16,38 @@ const history = ref([])
 const chatHistoryRef = useTemplateRef('chat-history-ref')
 const clearing = ref(false)
 const showMemoryManager = ref(false)
+const showContextMonitor = ref(false)
 const isOnline = ref(true)
 const chatError = ref('')
 const isTyping = computed(() => {
-  const lastMessage = history.value.at(-1)
-  return Boolean(lastMessage?.role === 'ai' && lastMessage?.isTyping)
+  return history.value.some(message => message.role === 'ai' && message.isTyping)
 })
-let bubbleTimers = []
-let pendingBubbleState = null
+const bubbleTimers = new Map()
+const pendingBubbleStates = new Map()
 
-function clearBubbleTimers() {
-  bubbleTimers.forEach(timer => window.clearTimeout(timer))
-  bubbleTimers = []
+function clearBubbleTimers(responseId) {
+  if (responseId) {
+    ;(bubbleTimers.get(responseId) || []).forEach(timer => window.clearTimeout(timer))
+    bubbleTimers.delete(responseId)
+    return
+  }
+  bubbleTimers.forEach(timers => timers.forEach(timer => window.clearTimeout(timer)))
+  bubbleTimers.clear()
 }
 
-function flushPendingBubbles() {
+function flushPendingBubbles(responseId) {
+  const pendingBubbleState = pendingBubbleStates.get(responseId)
   if (!pendingBubbleState) return
-  clearBubbleTimers()
+  clearBubbleTimers(responseId)
   const {message, bubbles} = pendingBubbleState
   message.bubbles = [...bubbles]
   message.content = bubbles.join('\n')
   message.isTyping = false
-  pendingBubbleState = null
+  pendingBubbleStates.delete(responseId)
+}
+
+function findResponseMessage(responseId) {
+  return history.value.find(message => message.id === responseId && message.role === 'ai')
 }
 
 function bubbleDelay(previousBubble) {
@@ -65,70 +76,82 @@ const modalStyle = computed(() => {
 })
 
 function handlePushBackMessage(msg){
-  flushPendingBubbles()
   history.value.push(msg)
   chatHistoryRef.value.scrollToBottom()
 }
-function handleAddToLastMessage(delta){
-  const lastMessage = history.value.at(-1)
-  lastMessage.isTyping = false
-  lastMessage.content += delta
+function handleAddToLastMessage({responseId, delta}){
+  const targetMessage = findResponseMessage(responseId)
+  if (!targetMessage) return
+  targetMessage.isTyping = false
+  targetMessage.content += delta
   isOnline.value = true
   chatHistoryRef.value.scrollToBottom()
 }
-function handleSetLastMessageBubbles(bubbles){
-  const lastMessage = history.value.at(-1)
-  if (!lastMessage || lastMessage.role !== 'ai') return
-  flushPendingBubbles()
+function handleSetLastMessageBubbles({responseId, bubbles}){
+  const targetMessage = findResponseMessage(responseId)
+  if (!targetMessage) return
+  flushPendingBubbles(responseId)
   const normalized = Array.isArray(bubbles)
     ? bubbles.map(item => String(item).trim()).filter(Boolean)
     : []
   if (!normalized.length) {
-    lastMessage.isTyping = false
+    targetMessage.isTyping = false
     return
   }
 
-  lastMessage.bubbles = [normalized[0]]
-  lastMessage.content = normalized[0]
-  lastMessage.isTyping = normalized.length > 1
+  targetMessage.bubbles = [normalized[0]]
+  targetMessage.content = normalized[0]
+  targetMessage.isTyping = normalized.length > 1
   if (normalized.length > 1) {
-    pendingBubbleState = {message: lastMessage, bubbles: normalized}
+    const pendingBubbleState = {message: targetMessage, bubbles: normalized}
+    pendingBubbleStates.set(responseId, pendingBubbleState)
+    const timers = []
     let elapsed = 0
     for (let index = 1; index < normalized.length; index += 1) {
       elapsed += bubbleDelay(normalized[index - 1])
       const timer = window.setTimeout(() => {
-        if (pendingBubbleState?.message !== lastMessage) return
-        lastMessage.bubbles.push(normalized[index])
-        lastMessage.content = lastMessage.bubbles.join('\n')
-        lastMessage.isTyping = index < normalized.length - 1
+        if (pendingBubbleStates.get(responseId) !== pendingBubbleState) return
+        targetMessage.bubbles.push(normalized[index])
+        targetMessage.content = targetMessage.bubbles.join('\n')
+        targetMessage.isTyping = index < normalized.length - 1
         chatHistoryRef.value?.scrollToBottom()
         if (index === normalized.length - 1) {
-          pendingBubbleState = null
-          bubbleTimers = []
+          pendingBubbleStates.delete(responseId)
+          bubbleTimers.delete(responseId)
         }
       }, elapsed)
-      bubbleTimers.push(timer)
+      timers.push(timer)
     }
+    bubbleTimers.set(responseId, timers)
   }
   isOnline.value = true
   chatHistoryRef.value.scrollToBottom()
+}
+function handleReplyProvenance({responseId, provenance}) {
+  const targetMessage = findResponseMessage(responseId)
+  if (targetMessage) targetMessage.replyProvenance = provenance || {}
 }
 function handleConnectionOnline() {
   isOnline.value = true
   chatError.value = ''
 }
-function handleConnectionError() {
-  const lastMessage = history.value.at(-1)
-  if (lastMessage?.role === 'ai') {
-    lastMessage.isTyping = false
+function handleConnectionError({responseId, message}) {
+  const targetMessage = findResponseMessage(responseId)
+  if (targetMessage) {
+    targetMessage.isTyping = false
+    // 尚未收到任何回复内容 → 移除占位气泡，避免"空回复"残留在历史里
+    if (!targetMessage.content && !(targetMessage.bubbles || []).length) {
+      const index = history.value.indexOf(targetMessage)
+      if (index !== -1) history.value.splice(index, 1)
+    }
   }
   isOnline.value = false
-  chatError.value = '连接失败，请重试'
+  chatError.value = message || '连接失败，请重试'
 }
-function handleTypingFinished() {
-  const lastMessage = history.value.at(-1)
-  if (lastMessage?.role === 'ai' && pendingBubbleState?.message !== lastMessage) {
-    lastMessage.isTyping = false
+function handleTypingFinished({responseId}) {
+  const targetMessage = findResponseMessage(responseId)
+  if (targetMessage && !pendingBubbleStates.has(responseId)) {
+    targetMessage.isTyping = false
   }
 }
 function handlePushFrontMessage(msg){
@@ -137,6 +160,7 @@ function handlePushFrontMessage(msg){
 function handleClose() {
   inputRef.value.close()
   showMemoryManager.value = false
+  showContextMonitor.value = false
 }
 
 async function handleClearHistory() {
@@ -152,9 +176,9 @@ async function handleClearHistory() {
       friend_id: props.friend.id,
     })
     if (res.data.result === 'success') {
-      inputRef.value?.cancelCurrentRequest()
+      inputRef.value?.cancelAllRequests()
       clearBubbleTimers()
-      pendingBubbleState = null
+      pendingBubbleStates.clear()
       history.value = []
       clearing.value = false
     }
@@ -204,9 +228,11 @@ defineExpose({
           <RemoveIcon v-else />
         </button>
         <button @click="showMemoryManager = true" class="top-icon-button" title="管理记忆">🧠</button>
+        <button @click="showContextMonitor = true" class="top-icon-button" title="上下文监控">◫</button>
         <button @click="modalRef.close()" class="top-icon-button close-button" title="关闭">✕</button>
       </div>
       <MemoryManager v-if="friend && showMemoryManager" :friend-id="friend.id" @close="showMemoryManager = false" />
+      <ContextMonitor v-if="friend && showContextMonitor" :friend-id="friend.id" @close="showContextMonitor = false" />
       <ChatHistory ref="chat-history-ref" v-if="friend" :history="history" :friendId="friend.id" :character="friend.character" @pushFrontMessage="handlePushFrontMessage" />
       <InputField
           v-if="friend"
@@ -215,6 +241,7 @@ defineExpose({
           @pushBackMessage="handlePushBackMessage"
           @addToLastMessage="handleAddToLastMessage"
           @setLastMessageBubbles="handleSetLastMessageBubbles"
+          @replyProvenance="handleReplyProvenance"
           @connectionOnline="handleConnectionOnline"
           @connectionError="handleConnectionError"
           @typingFinished="handleTypingFinished"
@@ -332,6 +359,7 @@ defineExpose({
 .typing-indicator-visible {
   color: rgba(187, 247, 208, 0.95);
 }
+
 
 .typing-mini-dot {
   width: 6px;

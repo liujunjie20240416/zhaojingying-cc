@@ -41,6 +41,7 @@ def _copy_imported_memories(source_friend: Friend, target_friend: Friend) -> Non
                 "is_active": source.is_active,
                 "valid_from": source.valid_from,
                 "valid_to": source.valid_to,
+                "trajectory_key": source.trajectory_key,
             },
         )
         for evidence in source.evidences.all():

@@ -15,6 +15,7 @@ from ai.agents.supervisor import supervisor_node
 from ai.agents.memory_agent import memory_agent_node
 from ai.agents.emotion_agent import emotion_agent_node
 from ai.agents.conversation_agent import conversation_agent_node
+from ai.memory.intent import detect_memory_intent
 
 
 class MultiAgentState(TypedDict):
@@ -22,6 +23,10 @@ class MultiAgentState(TypedDict):
     intent: str
     delegate_to: str
     memory_context: str
+    memory_sections: NotRequired[list[dict]]
+    memory_intent: NotRequired[dict]
+    retrieval_plan: NotRequired[dict]
+    reply_provenance: NotRequired[dict]
     emotion_analysis: dict | None
     character_profile: str
     style_profile: str
@@ -31,6 +36,8 @@ class MultiAgentState(TypedDict):
     character_name: str
     chat_sender_name: str
     semantic_facts: list[str]
+    core_memory_context: NotRequired[str]
+    last_provider_input_tokens: NotRequired[int]
     friend_id: int
     character_id: int | None
     trace_metadata: NotRequired[dict]
@@ -38,6 +45,9 @@ class MultiAgentState(TypedDict):
     vision_attachments: NotRequired[list]
     memory_done: NotRequired[bool]
     emotion_done: NotRequired[bool]
+    # Intent classified for the previous turn (persisted on the last Message);
+    # short follow-ups inherit it instead of paying an LLM classification.
+    previous_intent: NotRequired[str]
 
 
 STRONG_EMOTION_SIGNALS = [
@@ -75,7 +85,7 @@ def route_from_supervisor(state: dict) -> str:
     # 强烈情绪优先；普通闲聊/时间直接回复；记忆类才检索。
     if intent == "emotional":
         return "emotion"
-    if intent in {"recall", "memory"}:
+    if intent in {"recall", "memory"} or detect_memory_intent(_last_user_msg(state)).get("needs_lightweight_recall"):
         return "memory"
     return "conversation"
 
@@ -96,7 +106,11 @@ def route_after_emotion(state: dict) -> str:
     intent = state.get("intent", "")
     user_msg = _last_user_msg(state)
     recall_signals = ["记得", "以前", "那次", "第一次", "上次", "什么时候"]
-    if intent == "recall" or any(s in user_msg for s in recall_signals):
+    if (
+        intent == "recall"
+        or any(s in user_msg for s in recall_signals)
+        or detect_memory_intent(user_msg).get("needs_lightweight_recall")
+    ):
         return "memory"
     return "conversation"
 

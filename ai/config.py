@@ -1,45 +1,63 @@
 """AI provider configuration helpers.
 
-The project uses two provider groups:
+The project uses three provider groups:
 - DashScope for embeddings, ASR and TTS.
-- Zhipu/BigModel GLM for every generative LLM task.
+- A text LLM for every non-vision generative task.
+- Zhipu/BigModel GLM only for image understanding in the final conversation.
 
-GLM_* is the canonical text-model configuration. VISION_LLM_* can override the
-vision route. Legacy LLM_API_KEY is accepted only as a key migration fallback;
-legacy LLM base/model values deliberately cannot route traffic back to another
-provider.
+LLM_* is the canonical, provider-neutral configuration for the text model;
+any OpenAI-compatible provider works (the base URL selects the vendor).
+DEEPSEEK_* remains a legacy fallback for existing setups.  VISION_LLM_*
+configures the GLM vision route.
 """
 
 import os
 
 
-DEFAULT_GLM_API_BASE = "https://open.bigmodel.cn/api/paas/v4"
-DEFAULT_LLM_MODEL = "glm-5.2"
+DEFAULT_DEEPSEEK_API_BASE = "https://api.deepseek.com/v1"
+DEFAULT_LLM_MODEL = "deepseek-v4-pro"
 DEFAULT_DASHSCOPE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
+def chat_api_key() -> str:
+    """Compatibility alias for the final text conversation route."""
+    return llm_api_key()
+
+
+def chat_api_base() -> str:
+    return llm_api_base()
+
+
+def chat_model() -> str:
+    return llm_model()
+
+
 def llm_api_key() -> str:
-    return (
-        os.getenv("GLM_API_KEY", "").strip()
-        or os.getenv("VISION_LLM_API_KEY", "").strip()
-        or os.getenv("LLM_API_KEY", "").strip()
-    )
+    return os.getenv("LLM_API_KEY", "").strip() or os.getenv("DEEPSEEK_API_KEY", "").strip()
 
 
 def llm_api_base() -> str:
-    return os.getenv("GLM_API_BASE", "").strip() or DEFAULT_GLM_API_BASE
+    return (
+        os.getenv("LLM_API_BASE", "").strip()
+        or os.getenv("DEEPSEEK_API_BASE", "").strip()
+        or DEFAULT_DEEPSEEK_API_BASE
+    )
 
 
 def llm_model() -> str:
-    return os.getenv("GLM_MODEL", DEFAULT_LLM_MODEL).strip() or DEFAULT_LLM_MODEL
+    return (
+        os.getenv("LLM_MODEL", "").strip()
+        or os.getenv("DEEPSEEK_MODEL", "").strip()
+        or DEFAULT_LLM_MODEL
+    )
 
 
 def vision_llm_api_key() -> str:
-    return os.getenv("VISION_LLM_API_KEY", "").strip() or llm_api_key()
+    return os.getenv("VISION_LLM_API_KEY", "").strip() or os.getenv("GLM_API_KEY", "").strip()
 
 
 def vision_llm_api_base() -> str:
-    return os.getenv("VISION_LLM_API_BASE", "").strip() or llm_api_base()
+    return os.getenv("VISION_LLM_API_BASE", "").strip() or "https://open.bigmodel.cn/api/paas/v4"
 
 
 def vision_llm_model() -> str:
@@ -49,17 +67,23 @@ def vision_llm_model() -> str:
 def require_llm_config():
     missing = []
     if not llm_api_key():
-        missing.append("GLM_API_KEY（也可暂时复用 VISION_LLM_API_KEY）")
+        missing.append("LLM_API_KEY（或 DEEPSEEK_API_KEY）")
     if not llm_api_base():
-        missing.append("GLM_API_BASE")
+        missing.append("LLM_API_BASE（或 DEEPSEEK_API_BASE）")
     if not llm_model():
-        missing.append("GLM_MODEL")
+        missing.append("LLM_MODEL（或 DEEPSEEK_MODEL）")
     if missing:
         raise RuntimeError(
             "缺少大模型配置: "
             + ", ".join(missing)
-            + "。预处理、记忆反思和 AI 对话统一使用 GLM；不要使用阿里云 embedding/语音的 API Key。"
+            + "。文本模型使用 LLM_*（OpenAI 兼容任意厂商）；"
+            "不要使用阿里云 embedding/语音的 API Key。"
         )
+
+
+def require_chat_config():
+    """Compatibility alias for non-vision conversation validation."""
+    require_llm_config()
 
 
 def dashscope_api_key() -> str:

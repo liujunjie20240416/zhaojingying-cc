@@ -35,7 +35,8 @@ flowchart LR
     SUP -->|强情绪 / 歧义| EMO["Emotion Agent"]
     MEM --> CONV
     EMO --> CONV
-    CONV --> GLM["GLM Text / Vision"]
+    CONV -->|文字| DEEPSEEK["DeepSeek V4 Pro"]
+    CONV -->|图片| GLM["GLM Vision"]
     API --> VOICE["DashScope ASR / TTS"]
 
     MEM --> SEARCH["Unified Conversation History Search"]
@@ -57,9 +58,13 @@ flowchart LR
 | Imported Chat | `ChatMessage` / SQLite | 微信导入原文，支持 FTS5、向量检索和上下文窗口扩展 |
 | Online Chat | `Message` / SQLite | 后续用户与 AI 的完整原始聊天，Reflection 后也不会删除 |
 | Semantic Memory | `SemanticMemory` / SQLite | 身份、偏好、经历、关系模式等结构化长期事实 |
+| Conversation Collapse | `ConversationCollapse` / SQLite | 折叠时按消息区间生成的“阶段胶囊”，带主题关键词，供按时期检索 |
+| Time Chunk | `TimeChunk` / SQLite | 导入记录的按日分块元数据，时间锚定检索的依据 |
 | Vector Projection | LanceDB | Imported Chat、Online Chat 和 Semantic Memory 的语义检索副本 |
 | Working Summary | `Friend.conversation_summary` | 较早 Online Chat 的滚动工作摘要，不替代原文 |
 | Reflection Job | `ReflectionJob` / SQLite | 按聊天日从 Online Chat 提炼长期事实的持久任务 |
+
+原始聊天（Imported Chat、Online Chat）永远是权威存储，滚动摘要、胶囊、Semantic Memory 和向量索引都是可重建的派生层，折叠只生成投影视图，绝不删除原文。
 
 Semantic Memory 不只是文本，还包含：
 
@@ -70,6 +75,8 @@ Semantic Memory 不只是文本，还包含：
 - `valid_from / valid_to`：表达事实的时间有效区间
 - `is_mutable / is_locked`：控制自动更新能否改写核心事实
 - `MemoryEvidence`：关联原始消息索引或 Online Message ID
+
+**时间锚定守卫**：写入端提示词要求把“本周 / 当天 / 最近”等相对时间锚定为绝对日期；读取端（`ai/memory/time_anchor.py`）对历史遗留的未锚定相对时间自动降权并标注“（时间不确定，可能已过期）”，防止把过期的“本周”当成当下的“本周”呈现。
 
 SQLite 是结构化事实的真源，LanceDB 只负责检索投影。重建索引时使用临时表校验、表名切换和旧表清理，避免 append 导致重复向量、过期向量长期堆积。
 
@@ -94,6 +101,8 @@ SQLite 是结构化事实的真源，LanceDB 只负责检索投影。重建索�
 
 例如用户问“我以前是不是说过不喜欢香菜”，系统可以同时找到微信原话和之后 AI 聊天中的新表述，并保留来源与消息引用，而不是只返回一条脱离语境的摘要。
 
+**时间锚定检索**：Query Rewriter 输出 `time_mode`（historical / recent / specific_time），配合 `TimeChunk` 按聊天日分块；回忆“上周聊过什么”只查对应时间片，胶囊检索（`search_conversation_collapses`）在无关键词命中时按“最早/最近”时期兜底，避免把整段历史摘要注入。
+
 ### 3. 上下文工程，而不是无限堆 Prompt
 
 每次模型请求使用一份按需组装的上下文投影：
@@ -114,11 +123,13 @@ flowchart TD
 
 关键策略：
 
-- Online Chat 超过 15 轮后触发压缩，保留最近 10 轮原文；压缩失败时安全降级，不丢失尚未摘要的消息。
+- **Token 预算**（`ai/memory/context_budget.py`）：输入上下文有 SOFT 32K / HARD 40K 两级预算（`CONTEXT_*` 可覆盖），内置 CJK token 估算器，按意图对记忆区块加权分配，越界时逐区块截断；`context_diagnostics` 把每次请求的预算使用情况发给前端，可在“上下文监控”面板查看。
+- **滚动折叠按 token 触发**：未折叠的 Online Chat 超过 `CONTEXT_WORKING_HISTORY_TOKENS`（默认 9000）时触发压缩，保留最近 10 轮原文（约 6000 token 上限）；每次折叠按 8000 字符分批，逐批生成工作摘要和阶段胶囊并推进 `summary_through_message_id` 检查点。折叠按好友维度串行化（进程内锁 + 锁内重读检查点），并发请求不会重复折叠或回退检查点；压缩失败时安全降级为有界的原始消息投影，不丢失尚未摘要的消息。
 - 普通闲聊和时间问题跳过 Memory Agent，减少延迟、Token 和无关记忆污染。
 - Relationship Overview 只在关系/回忆需要时进入记忆上下文，不再每轮全量注入。
 - `Friend.memory` 保留为兼容缓存和管理视图，但不再整段塞入系统提示词。
 - 检索结果先跨来源去重，再重排和压缩，控制最终证据数量与字符预算。
+- **优雅降级**：Supervisor 分类、Query Rewriter、摘要压缩和 Emotion 分析各自有确定性兜底——LLM 不可用或返回非法格式时，回退到关键词路由 / 原文截断 / neutral 情绪，图不会因为单个环节失败而中断。
 - 图片 Base64 不进入 Supervisor、Memory Agent、Emotion Agent 或普通 Trace，只进入最终视觉模型调用。
 
 ### 4. 混合意图路由与 Multi-Agent 编排
@@ -132,7 +143,9 @@ Supervisor 使用“确定性规则优先、LLM 处理歧义”的混合路由�
 | Emotion Agent | 识别情绪类型、强度和建议语气，只输出结构化状态 |
 | Conversation Agent | 汇总唯一 System Prompt，生成符合角色风格的结构化气泡数组 |
 
-明确问题通过关键词和时间信号零额外延迟路由；“算了”“没事”“你忙吧”或含 emoji 的歧义表达再交给 GLM 分类。这样兼顾可解释性、成本和召回准确率。
+明确问题通过关键词和时间信号零额外延迟路由；“算了”“没事”“你忙吧”或含 emoji 的歧义表达才交给 LLM 分类（DeepSeek，20s 超时，失败回退 chat）。这样兼顾可解释性、成本和召回准确率。
+
+**意图继承**：短消息（≤24 字符，如“还有呢？”“哈哈”）本身不携带意图，直接继承上一轮已分类的意图（上一轮的 `supervisor_intent` 持久化在 `Message.reply_provenance` 上），省掉每轮一次 LLM 分类调用；只有“迪士尼呢？”“你去翻”这类带指代线索的短问，或“算了”等转移信号，才重新走 LLM 分类。
 
 ### 5. 可恢复的聊天预处理 Pipeline
 
@@ -182,7 +195,10 @@ Conversation Agent 输出 `{"bubbles": [...]}`，前端按数组逐条渲染。�
 - 导入记忆支持 `private / public` 可见性，默认隔离不同用户的私有聊天和派生记忆。
 - 手动记忆可以锁定，Reflection 不得随意覆盖角色身份和历史事实。
 - Reflection 采用持久日级任务、唯一约束、原子抢占、失败重试和超时任务恢复。
-- 在线聊天原文永久保留；摘要、Semantic Memory 和 LanceDB 都是可重建的派生层。
+- 在线聊天原文永久保留；摘要、胶囊、Semantic Memory 和 LanceDB 都是可重建的派生层。
+- **失败不静默**：图执行或供应商异常通过 SSE error 事件透出到前端（“AI 回复生成失败，请重试”），不再吞掉错误；空回复或失败回复不落库，避免污染后续上下文。
+- **回复溯源**：每条回复持久化 `reply_provenance`（本轮回溯到哪些摘要、胶囊、原文证据，以及 `supervisor_intent`），前端可查看，后端可审计。
+- **并发安全**：回复落库与清空历史之间用行锁 + 代际号（`online_history_generation`）保证原子性；滚动折叠按好友串行化，检查点不会并发回退。
 - 提供聊天文本脱敏工具，可识别密码、身份证号及自定义敏感前缀，且不修改原文件。
 - 可选 LangSmith Trace 覆盖路由、检索、压缩、最终 Prompt、预处理和 Reflection。
 
@@ -191,6 +207,8 @@ Conversation Agent 输出 `{"bubbles": [...]}`，前端按数组逐条渲染。�
 - Vue 3 + Tailwind CSS + DaisyUI 的响应式界面，兼容桌面与移动端。
 - 电影感视频背景、玻璃拟态导航和角色资料页。
 - 图片预览、文字/语音输入、多气泡延迟、时间分隔和在线/输入状态。
+- 后端错误通过 SSE 事件在聊天框顶部展示，失败不静默；空回复占位气泡自动移除。
+- Context Monitor 面板实时展示每次请求的上下文预算使用（soft/hard、各区块占比、诊断信息）。
 - Memory Manager 支持查看、新增、编辑、删除和锁定长期记忆。
 - 微信导入展示 Chunk 级进度、失败数量、阶段状态和断点续跑入口。
 - Style Profile 在角色编辑页只读展示，便于验证模型学到的表达规则。
@@ -214,7 +232,8 @@ Conversation Agent 输出 `{"bubbles": [...]}`，前端按数组逐条渲染。�
 | Web API / Streaming | FastAPI, Uvicorn, SSE, WebSocket |
 | ORM / Migration / Admin | Django 6, Django Admin |
 | AI Orchestration | LangGraph, LangChain |
-| Text / Vision LLM | 智谱 GLM OpenAI-compatible API |
+| Text LLM | OpenAI-compatible API，默认 DeepSeek（`LLM_*` 通用名，base 可指向任意厂商） |
+| Vision LLM | 智谱 GLM OpenAI-compatible API（图片理解，`VISION_LLM_*` 可覆盖） |
 | Embedding / ASR / TTS | 阿里云 DashScope |
 | Database / Search | SQLite, FTS5, LanceDB |
 | Frontend | Vue 3, Vite, Pinia, Vue Router, Tailwind CSS, DaisyUI |
@@ -266,6 +285,10 @@ cp .env.example .env
 
 ```dotenv
 DJANGO_SECRET_KEY="replace-me"
+LLM_API_KEY=""
+LLM_API_BASE="https://api.deepseek.com/v1"
+LLM_MODEL="deepseek-v4-pro"
+
 GLM_API_KEY=""
 GLM_API_BASE="https://open.bigmodel.cn/api/paas/v4"
 GLM_MODEL="glm-5.2"
@@ -277,7 +300,9 @@ DASHSCOPE_API_BASE="https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_WSS_URL="wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 ```
 
-视觉密钥和 Base URL 未单独填写时会复用 `GLM_*`；生成式文本任务统一走 GLM，DashScope 密钥仅用于 Embedding、ASR、TTS 和音色服务。
+所有非视觉生成任务（对话、预处理、摘要、记忆反思、意图分类和 RAG 辅助）使用 `LLM_*` —— 这是与厂商无关的通用名，`LLM_API_BASE` 指向哪个 OpenAI 兼容地址就调用哪家（DeepSeek、Kimi、通义、GLM 均可，只需改 base/key/model 三个值；旧配置 `DEEPSEEK_*` 仍作为兼容回退生效）。用户发送图片时，Conversation Agent 改用 `VISION_LLM_*`（默认复用 `GLM_*`）。DashScope 密钥仅用于 Embedding、ASR、TTS 和音色服务。
+
+可选：上下文预算可通过环境变量覆盖（见 `.env.example` 注释），例如 `CONTEXT_WORKING_HISTORY_TOKENS`（折叠触发阈值，默认 9000）、`CONTEXT_SOFT_INPUT_TOKENS` / `CONTEXT_HARD_INPUT_TOKENS`（输入上下文软/硬上限，默认 32K / 40K）、`CONTEXT_SUMMARY_TOKENS`（工作摘要上限，默认 1800）。
 
 ### 2. 启动后端
 
@@ -336,15 +361,16 @@ uv run python manage.py run_reflection_jobs
 可以根据实际岗位压缩成以下表述：
 
 > **Memory-Driven AI Companion｜个人全栈 AI 项目**
-> 基于 FastAPI、Django、Vue 3、LangGraph 和 GLM 构建多模态 AI Companion；设计 Imported Chat、Online Chat、Semantic Memory、滚动摘要四层记忆体系，通过 FTS5 + LanceDB 混合检索、Query Rewrite、Rerank 与 Context Compressor 实现跨来源证据召回。实现 2.3 万条真实聊天数据的并发 Map/Reduce 预处理、Chunk Checkpoint 断点续跑、关系时间线与角色 Style Profile 学习；使用持久日级 Reflection 任务、原子写入和可重建向量投影保证长任务可靠性，并支持图片理解、ASR/TTS、结构化多气泡回复和移动端适配。
+> 基于 FastAPI、Django、Vue 3、LangGraph、DeepSeek + GLM 构建多模态 AI Companion；设计 Imported Chat、Online Chat、Semantic Memory、滚动摘要 + 阶段胶囊四层记忆体系，通过 FTS5 + LanceDB 混合检索、Query Rewrite、时间锚定检索、Rerank 与 Context Compressor 实现跨来源证据召回。实现 2.3 万条真实聊天数据的并发 Map/Reduce 预处理、Chunk Checkpoint 断点续跑、关系时间线与角色 Style Profile 学习；使用持久日级 Reflection 任务、原子写入、可重建向量投影和软/硬上下文预算保证长任务可靠性，并支持图片理解、ASR/TTS、结构化多气泡回复和移动端适配。
 
 可拆分的技术亮点：
 
 - 设计统一 Conversation History Search，在不合并底层表的前提下统一检索微信原文和后续 AI 原始对话。
-- 设计“滚动摘要 + 最近 10 轮原文 + 按意图检索证据”的上下文预算，减少系统 Prompt 重复和无关记忆注入。
+- 设计“滚动摘要 + 最近原文 + 按意图检索证据”的上下文工程：32K/40K 软硬预算、CJK 估算、意图加权分配和阶段胶囊，减少系统 Prompt 重复和无关记忆注入。
+- 混合意图路由 + 意图继承：关键词零延迟快路径、歧义才 LLM 分类、短消息继承上轮意图，省掉每轮分类调用。
 - 将 2.3 万条聊天切分为 304 个可恢复 Analysis Chunk，支持并发处理、失败重试、partial 状态和断点续跑。
-- 设计带时间状态、可变性、锁定与证据引用的 Semantic Memory，解决重复事实和新旧事实冲突。
-- 构建 GLM 文本/视觉与 DashScope 语音链路，支持图片理解、流式 TTS 和即时通讯式多气泡交互。
+- 设计带时间状态、可变性、锁定、证据引用与相对时间锚定守卫的 Semantic Memory，解决重复事实和新旧事实冲突。
+- 构建 DeepSeek 文本 + GLM 视觉 + DashScope 语音链路，支持图片理解、流式 TTS 和即时通讯式多气泡交互。
 
 ## 测试与质量
 

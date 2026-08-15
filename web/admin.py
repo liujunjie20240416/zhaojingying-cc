@@ -4,7 +4,7 @@ from web.models.friend import Friend, Message, MessageAttachment, SystemPrompt
 # Register your models here.
 from web.models.user import UserProfile
 from web.models.character import Character,Voice
-from web.models.memory import EpisodicMemory, SemanticMemory
+from web.models.memory import SemanticMemory
 from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
 
 @admin.register(UserProfile)
@@ -61,8 +61,3 @@ class TopicTagAdmin(admin.ModelAdmin):
     search_fields = ("tag", "character__name")
 
 
-@admin.register(EpisodicMemory)
-class EpisodicMemoryAdmin(admin.ModelAdmin):
-    list_display = ("summary", "friend", "importance", "created_at")
-    search_fields = ("summary", "keywords")
-    raw_id_fields = ("friend",)

@@ -26,13 +26,13 @@ def setup_django():
 
 @pytest.fixture
 def api_key():
-    """GLM integration key; local unit tests must not consume it."""
-    return os.getenv("GLM_API_KEY", "test-key")
+    """Text-LLM integration key; local unit tests must not consume it."""
+    return os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "test-key")
 
 
 @pytest.fixture
 def api_base():
-    return os.getenv("GLM_API_BASE", "https://api.example.com/v1")
+    return os.getenv("LLM_API_BASE") or os.getenv("DEEPSEEK_API_BASE", "https://api.example.com/v1")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -40,7 +40,7 @@ def pytest_collection_modifyitems(config, items):
     if os.getenv("RUN_LLM_INTEGRATION_TESTS") == "1":
         return
     skip_llm = pytest.mark.skip(
-        reason="set RUN_LLM_INTEGRATION_TESTS=1 to call the configured GLM API"
+        reason="set RUN_LLM_INTEGRATION_TESTS=1 to call the configured DeepSeek API"
     )
     for item in items:
         if "llm_integration" in item.keywords:

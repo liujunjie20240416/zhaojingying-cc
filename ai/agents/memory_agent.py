@@ -14,14 +14,16 @@ from ai.rag.compressor import ContextCompressor
 from ai.memory.intent import detect_memory_intent
 from ai.memory.history_search import ConversationHistorySearch
 from ai.memory.import_access import can_access_imported_context
-from ai.memory.semantic import search_semantic
+from ai.memory.conversation_summary import search_conversation_collapses
+from ai.memory.semantic import expand_state_trajectories, search_semantic
+from ai.memory.time_anchor import annotate_relative_time_fact, find_unanchored_relative_time
 from ai.tracing import record_trace
 from web.models.chat_message import ChatMessage
 from web.models.friend import Friend, Message
 from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
 
 
-def _search_time_chunks(character_id: int, user_msg: str) -> dict | None:
+def _search_time_chunks(character_id: int, user_msg: str, plan: dict | None = None) -> dict | None:
     """第 1 轮：时间匹配 — 在 TimeChunk 中搜索用户提到的时间段。
 
     不依赖 LLM 猜的阶段名（如"暧昧期"），而是：
@@ -29,12 +31,17 @@ def _search_time_chunks(character_id: int, user_msg: str) -> dict | None:
     2. 时间方向词（"以前"/"最近"）→ 映射到早/晚期 chunk
     """
     # 时间方向词
-    early_words = ["刚认识", "以前", "那会儿", "那时候", "当初", "最开始", "刚加", "第一次", "之前", "上次"]
+    early_words = ["刚认识", "什么时候认识", "何时认识", "相识", "以前", "那会儿", "那时候", "当初", "最开始", "刚加", "第一次", "之前", "上次"]
     recent_words = ["最近", "前几天", "后来", "现在"]
 
     chunks = list(TimeChunk.objects.filter(character_id=character_id).order_by("start_msg_index"))
     if not chunks:
         return None
+    anchor = str((plan or {}).get("temporal_anchor", "unknown"))
+    if anchor in {"origin", "early"}:
+        return _chunk_to_result(chunks[0])
+    if anchor == "recent":
+        return _chunk_to_result(chunks[-1])
 
     import jieba
     keywords = []
@@ -57,13 +64,16 @@ def _search_time_chunks(character_id: int, user_msg: str) -> dict | None:
             best_score = score
             best_chunk = chunk
 
+    # Origin questions must use the first relationship period. Generic words
+    # such as “什么/咱们” otherwise make an unrelated later chunk win.
+    if any(w in user_msg for w in early_words):
+        return _chunk_to_result(chunks[0])
+
     # 内容关键词匹配到了 → 直接返回
     if best_chunk and best_score >= 3:
         return _chunk_to_result(best_chunk)
 
-    # 没匹配到内容，但用户说了时间方向词 → 取最早/最近的 chunk
-    if any(w in user_msg for w in early_words):
-        return _chunk_to_result(chunks[0])
+    # 没匹配到内容，但用户说了时间方向词 → 取最近的 chunk
     if any(w in user_msg for w in recent_words):
         return _chunk_to_result(chunks[-1])
 
@@ -78,6 +88,73 @@ def _chunk_to_result(chunk) -> dict:
         "end_msg_index": chunk.end_msg_index,
         "summary": chunk.summary,
     }
+
+
+def _imported_anchor_evidence(
+    character_id: int,
+    time_scope: tuple[int, int] | None,
+    plan: dict,
+) -> dict | None:
+    """Materialise a time-planned Imported Chat window as evidence."""
+    if not character_id or not time_scope:
+        return None
+    queryset = ChatMessage.objects.filter(
+        character_id=character_id,
+        msg_index__gte=time_scope[0],
+        msg_index__lte=time_scope[1],
+    ).order_by("msg_index")
+    if plan.get("temporal_anchor") == "recent":
+        messages = list(queryset.order_by("-msg_index")[:8])
+        messages.reverse()
+    else:
+        messages = list(queryset[:8])
+    if not messages:
+        return None
+    return {
+        "source_type": "import_chat",
+        "message_refs": [message.msg_index for message in messages],
+        "timestamp": messages[0].timestamp,
+        "content": "\n".join(
+            f"[{message.timestamp}] {message.sender}：{message.content}"
+            for message in messages
+        ),
+        "score": 1.15,
+    }
+
+
+def _select_source_diverse_hits(
+    ranked_hits: list[dict],
+    plan: dict,
+    anchor_evidence: dict | None = None,
+    limit: int = 8,
+) -> list[dict]:
+    """Retain required source coverage after relevance reranking."""
+    ordered: list[dict] = []
+    seen: set[tuple] = set()
+
+    def add(hit: dict):
+        key = (hit.get("source_type"), tuple(hit.get("message_refs") or []))
+        if key not in seen and len(ordered) < limit:
+            seen.add(key)
+            ordered.append(hit)
+
+    import_hits = [hit for hit in ranked_hits if hit.get("source_type") == "import_chat"]
+    online_hits = [hit for hit in ranked_hits if hit.get("source_type") == "online_chat"]
+    policy = plan.get("source_policy", "any")
+    if anchor_evidence and policy in {"import_preferred", "balanced"}:
+        add(anchor_evidence)
+    if policy == "import_preferred":
+        for hit in import_hits[:2]: add(hit)
+        for hit in online_hits[:2]: add(hit)
+    elif policy == "balanced":
+        for hit in import_hits[:2]: add(hit)
+        for hit in online_hits[:2]: add(hit)
+    elif policy == "online_preferred":
+        for hit in online_hits[:3]: add(hit)
+        for hit in import_hits[:1]: add(hit)
+    for hit in ranked_hits:
+        add(hit)
+    return ordered
 
 
 def _search_topic_tags(character_id: int, user_msg: str) -> list[str]:
@@ -124,6 +201,18 @@ def _load_chat_messages_by_indices(character_id: int, msg_indices: list[int], li
     ]
 
 
+def _recent_dialogue_for_retrieval(messages: list, limit: int = 4) -> str:
+    """Give the retrieval planner enough antecedent context for short follow-ups."""
+    lines = []
+    for message in list(messages[:-1])[-limit:]:
+        content = getattr(message, "content", "")
+        if not content:
+            continue
+        role = "AI" if getattr(message, "type", "") == "ai" else "用户"
+        lines.append(f"{role}：{str(content)[:500]}")
+    return "\n".join(lines)
+
+
 def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
     """Memory Agent — 三轮检索：时间匹配 → 混合检索 → 话题路由"""
     user_msg = ""
@@ -143,16 +232,30 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
     imported_context_allowed = bool(friend and can_access_imported_context(friend))
     memory_intent = detect_memory_intent(user_msg)
     should_search_raw = (
-        state.get("intent") == "recall" or memory_intent.get("needs_raw_chat", False)
+        state.get("intent") == "recall"
+        or memory_intent.get("needs_raw_chat", False)
+        or memory_intent.get("needs_lightweight_recall", False)
     )
     queries = [user_msg]
-    if state.get("intent") == "recall" and (
-        len(user_msg) <= 30 or any(word in user_msg for word in ("那次", "当时", "那件事", "她"))
-    ):
+    retrieval_plan = {
+        "queries": queries,
+        "temporal_anchor": memory_intent.get("time_mode", "unknown"),
+        "source_policy": "any",
+        "evidence_policy": "mixed",
+    }
+    if should_search_raw or state.get("intent") == "memory":
         try:
-            queries = QueryRewriter(api_key, api_base).rewrite(user_msg)[:3]
+            retrieval_plan = QueryRewriter(api_key, api_base).plan(
+                user_msg,
+                fallback_intent=memory_intent,
+                imported_chat_available=imported_context_allowed,
+                recent_dialogue=_recent_dialogue_for_retrieval(state.get("messages", [])),
+            )
+            queries = retrieval_plan["queries"][:3]
         except Exception:
             queries = [user_msg]
+    if retrieval_plan.get("temporal_anchor") != "unknown":
+        memory_intent["time_mode"] = retrieval_plan["temporal_anchor"]
 
     # 1. Search Semantic Memory
     semantic_candidates: dict[int, dict] = {}
@@ -164,10 +267,20 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
             include_imported=imported_context_allowed,
         ):
             semantic_candidates.setdefault(item["id"], item)
-    semantic_results = _rank_semantic_results(
+    ranked_semantic_results = _rank_semantic_results(
         list(semantic_candidates.values()),
         memory_intent,
-    )[:8]
+    )
+    if memory_intent.get("needs_state_trajectory"):
+        ranked_semantic_results = expand_state_trajectories(
+            friend_id, ranked_semantic_results, limit=12
+        )
+    semantic_results = ranked_semantic_results[:12 if memory_intent.get("needs_state_trajectory") else 8]
+    # 读取端加固：只含相对时间（"本周/当天"）的旧事实没有绝对日期锚点，
+    # 直接注入会被当成当前事实。统一追加"可能已过期"注释，让模型知道该
+    # 事实的时间信息不可靠，而不是断言"就这周嘛"。
+    for item in semantic_results:
+        item["fact"] = annotate_relative_time_fact(item.get("fact", ""))
     target_subject = memory_intent.get("target_subject", "mixed")
     category_hint = memory_intent.get("category_hint", "any")
     semantic_reliable = any(
@@ -190,9 +303,28 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
         if r.get("subject") == "relationship" and r.get("category") != "experience"
     ]
 
+    trajectory_context = _format_state_trajectories(semantic_results)
+
+    collapse_context = ""
+    if friend_id and memory_intent.get("time_mode") in {
+        "historical", "early", "recent", "specific_time",
+    }:
+        collapses = search_conversation_collapses(
+            friend_id,
+            user_msg,
+            time_mode=memory_intent.get("time_mode", "any"),
+            limit=3,
+        )
+        if collapses:
+            lines = [
+                f"- 在线对话 message_id {collapse.start_message_id}-{collapse.end_message_id}: {collapse.summary}"
+                for collapse in collapses
+            ]
+            collapse_context = "【相关历史阶段胶囊】\n" + "\n".join(lines)
+
     # ── 第 1 轮：时间匹配 ──
     time_chunk = (
-        _search_time_chunks(character_id, user_msg)
+        _search_time_chunks(character_id, user_msg, retrieval_plan)
         if character_id and should_search_raw and imported_context_allowed
         else None
     )
@@ -205,6 +337,7 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
     # ── 第 2 轮：混合检索（有 time_scope 则缩小范围） ──
     history_context = ""
     history_hits: list[dict] = []
+    history_evidence_refs: list[dict] = []
     has_imported = bool(
         imported_context_allowed
         and character_id
@@ -219,7 +352,24 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
             imported_time_scope=time_scope,
             top_k=30,
         )
+        anchor_evidence = (
+            _imported_anchor_evidence(character_id, time_scope, retrieval_plan)
+            if imported_context_allowed
+            and retrieval_plan.get("source_policy") in {"import_preferred", "balanced"}
+            else None
+        )
         history_hits = reranker.rerank(user_msg, candidates, top_k=8)
+        history_hits = _select_source_diverse_hits(
+            history_hits, retrieval_plan, anchor_evidence, limit=8
+        )
+        history_evidence_refs = [
+            {
+                "source_type": hit.get("source_type"),
+                "message_refs": hit.get("message_refs", []),
+                "timestamp": hit.get("timestamp", ""),
+            }
+            for hit in history_hits[:5]
+        ]
         history_parts = []
         for hit in history_hits[:5]:
             label = "导入聊天" if hit.get("source_type") == "import_chat" else "后续AI聊天"
@@ -253,30 +403,37 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
                 lines.append(f"[{m['timestamp']}] {role}：{m['content'][:200]}")
             topic_messages = "【话题相关消息】\n" + "\n".join(lines[:15])
 
-    # Build context
-    parts: list[str] = []
+    # Build separately budgetable sections.  Conversation Agent selects from
+    # these according to the current question before applying its final cap.
+    sections: list[dict[str, str]] = []
     if time_context:
-        parts.append(time_context)
+        sections.append({"kind": "time_scope", "text": time_context})
+    if trajectory_context:
+        sections.append({"kind": "trajectory", "text": trajectory_context})
+    if collapse_context:
+        sections.append({"kind": "collapse", "text": collapse_context})
+    semantic_parts: list[str] = []
     if user_facts:
-        parts.append("【用户记忆】\n" + "\n".join(f"- {f}" for f in user_facts))
+        semantic_parts.append("【用户记忆】\n" + "\n".join(f"- {f}" for f in user_facts))
     if girlfriend_facts:
-        parts.append("【女友自我记忆】\n" + "\n".join(f"- {f}" for f in girlfriend_facts))
+        semantic_parts.append("【女友自我记忆】\n" + "\n".join(f"- {f}" for f in girlfriend_facts))
     if relationship_experiences:
-        parts.append("【共同经历】\n" + "\n".join(f"- {f}" for f in relationship_experiences))
+        semantic_parts.append("【共同经历】\n" + "\n".join(f"- {f}" for f in relationship_experiences))
     if relationship_patterns:
-        parts.append("【关系互动规律】\n" + "\n".join(f"- {f}" for f in relationship_patterns))
+        semantic_parts.append("【关系互动规律】\n" + "\n".join(f"- {f}" for f in relationship_patterns))
+    if semantic_parts:
+        sections.append({"kind": "semantic", "text": "\n\n".join(semantic_parts)})
     if history_context:
-        parts.append("【相关聊天原文】\n" + history_context)
+        sections.append({"kind": "raw_evidence", "text": "【相关聊天原文】\n" + history_context})
     if topic_messages:
-        parts.append(topic_messages)
-
-    context = "\n\n".join(parts)
+        sections.append({"kind": "topic", "text": topic_messages})
 
     # 注入关系演变概览（宏观）
     needs_relationship_overview = (
         memory_intent.get("target_subject") == "relationship"
         or memory_intent.get("category_hint") == "relationship"
     )
+    relationship_overview_context = ""
     if character_id and needs_relationship_overview and imported_context_allowed:
         analysis = ImportAnalysis.objects.filter(character_id=character_id, status="done").first()
         if analysis and analysis.relationship_overview:
@@ -284,11 +441,39 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
             timeline_context = _timeline_context_for_intent(analysis, memory_intent)
             if timeline_context:
                 overview_parts.append(timeline_context)
-            context = f"【关系演变概览】\n{chr(10).join(overview_parts)}\n\n" + context
+            relationship_overview_context = f"【关系演变概览】\n{chr(10).join(overview_parts)}"
+            sections.append({"kind": "relationship_overview", "text": relationship_overview_context})
+
+    # Fallback for callers that do not yet understand memory_sections.
+    context = "\n\n".join(section["text"] for section in sections)
 
     result = {
         "memory_context": context,
+        "memory_sections": sections,
+        "memory_intent": memory_intent,
+        "retrieval_plan": retrieval_plan,
         "semantic_facts": semantic_facts,
+        "reply_provenance": {
+            **(state.get("reply_provenance") or {}),
+            "retrieved_raw": [
+                {
+                    "source_type": hit.get("source_type", ""),
+                    "message_refs": hit.get("message_refs", [])[:30],
+                    "timestamp": hit.get("timestamp", ""),
+                    "excerpt": hit.get("content", "")[:3000],
+                }
+                for hit in history_hits[:5]
+            ],
+            "memory_intent": memory_intent,
+            "retrieval_plan": retrieval_plan,
+            "semantic_facts": [
+                {
+                    "id": item["id"], "fact": item["fact"],
+                    "subject": item.get("subject"), "category": item.get("category"),
+                }
+                for item in semantic_results
+            ],
+        },
     }
     record_trace(
         "memory_agent.retrieval",
@@ -297,6 +482,7 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
             "friend_id": friend_id,
             "character_id": character_id,
             "memory_intent": memory_intent,
+            "retrieval_plan": retrieval_plan,
             "should_search_raw": should_search_raw,
             "semantic_reliable": semantic_reliable,
             "imported_context_allowed": imported_context_allowed,
@@ -304,8 +490,13 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
             "time_chunk": time_chunk,
             "time_scope": time_scope,
             "semantic_results": semantic_results,
+            "trajectory_context": trajectory_context,
+            "collapse_context": collapse_context,
+            "relationship_overview_context": relationship_overview_context,
+            "memory_sections": sections,
             "history_hits": history_hits,
             "history_context": history_context,
+            "history_evidence_refs": history_evidence_refs,
             "topic_indices": topic_indices,
             "topic_messages": topic_messages,
         },
@@ -326,6 +517,10 @@ def _rank_semantic_results(results: list[dict], intent: dict) -> list[dict]:
             value += 1.0
         if category_hint != "any" and item.get("category") == category_hint:
             value += 0.7
+        # 相对时间事实无法回答"具体哪一天"类问题，且内容会随时间过期，
+        # 排序时降权，让带绝对日期的事实优先被选中注入。
+        if find_unanchored_relative_time(item.get("fact", "")):
+            value -= 0.8
         state = item.get("memory_state", "current")
         if time_mode in {"historical", "early", "specific_time"}:
             if state == "historical":
@@ -340,6 +535,33 @@ def _rank_semantic_results(results: list[dict], intent: dict) -> list[dict]:
         return value
 
     return sorted(results, key=score, reverse=True)
+
+
+def _format_state_trajectories(results: list[dict]) -> str:
+    groups: dict[str, list[dict]] = {}
+    for item in results:
+        key = item.get("trajectory_key", "")
+        if key:
+            groups.setdefault(key, []).append(item)
+    if not groups:
+        return ""
+    lines = ["【状态演变】"]
+    for key, items in groups.items():
+        if len(items) < 2:
+            continue
+        lines.append(f"- {key}：")
+        for item in sorted(
+            items,
+            key=lambda value: (
+                value.get("valid_from").isoformat()
+                if getattr(value.get("valid_from"), "isoformat", None)
+                else "",
+                value["id"],
+            ),
+        ):
+            state = "当前" if item.get("memory_state") == "current" else "历史"
+            lines.append(f"  - [{state}] {item['fact']}")
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def _timeline_context_for_intent(analysis: ImportAnalysis, intent: dict) -> str:

@@ -6,7 +6,7 @@ from ai.tracing import record_trace
 
 
 class QueryRewriter:
-    """将用户原始查询改写为 2-3 个不同角度的变体，提升检索召回率"""
+    """Turn a recall request into a structured retrieval plan."""
 
     def __init__(self, api_key: str = "", api_base: str = ""):
         if not api_key and not api_base:
@@ -17,17 +17,38 @@ class QueryRewriter:
         )
 
     def rewrite(self, query: str) -> list[str]:
-        """返回改写后的查询列表（包含原始 query）"""
-        prompt = f"""你是查询改写助手。用户说了一句中文口语，请从不同角度改写成2-3个检索查询。
+        """Compatibility wrapper for callers that only need rewritten queries."""
+        return self.plan(query)["queries"]
+
+    def plan(
+        self,
+        query: str,
+        *,
+        fallback_intent: dict | None = None,
+        imported_chat_available: bool = False,
+        recent_dialogue: str = "",
+    ) -> dict:
+        """Return queries plus temporal/source/evidence requirements in one call."""
+        fallback = _fallback_plan(query, fallback_intent, imported_chat_available)
+        prompt = f"""你是伴侣聊天的检索规划助手。理解用户是在问什么，再制定检索计划。
 
 规则：
-- 将口语化表达具体化（"上次那事"→推测具体指什么）
-- 补充可能的同义表达
-- 输出纯JSON数组，不含任何其他文字
+- queries: 2-3 个适合检索的改写，必须包含用户原话或同义表达。
+- temporal_anchor: origin|early|historical|specific_time|recent|current|unknown。
+  origin 指两人最初相识、第一次联系、怎么熟起来；不要只靠字面词判断，要理解语义。
+- source_policy: import_preferred|online_preferred|balanced|any。
+  问早期关系、导入历史时通常 import_preferred；问近期承诺通常 online_preferred；关系演变通常 balanced。
+- evidence_policy: raw_required|mixed|semantic_first。问具体经过、时间、原话时 raw_required。
+- 不知道时用 unknown/any，不要编造阶段。
+- Imported Chat 是否可用：{imported_chat_available}。
+- 只输出 JSON 对象，不要 Markdown。
+
+最近对话（仅用于理解用户当前这句的省略指代；不要把它当作检索目标）：
+{recent_dialogue or "（无）"}
 
 用户原话："{query}"
 
-输出格式示例：["查询角度1", "查询角度2", "查询角度3"]"""
+输出格式：{{"queries":["查询1","查询2"],"temporal_anchor":"unknown","source_policy":"any","evidence_policy":"mixed"}}"""
 
         trace_inputs = {
             "model": llm_model(),
@@ -39,7 +60,7 @@ class QueryRewriter:
             model=llm_model(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=200,
+            max_tokens=320,
         )
         content = resp.choices[0].message.content.strip()
         # 清理 markdown code fence
@@ -49,18 +70,28 @@ class QueryRewriter:
                 content = content[:-3]
             content = content.strip()
         try:
-            rewrites = json.loads(content)
-            if not isinstance(rewrites, list):
-                return [query]
-            # 确保原始 query 在列表中
-            rewrites = [q for q in rewrites if isinstance(q, str) and q.strip()]
+            parsed = json.loads(content)
+            if not isinstance(parsed, dict):
+                return fallback
+            rewrites = [q.strip() for q in parsed.get("queries", []) if isinstance(q, str) and q.strip()]
             if query not in rewrites:
                 rewrites.insert(0, query)
-            result = rewrites[:4]
+            result = {
+                "queries": rewrites[:4],
+                "temporal_anchor": _allowed(parsed.get("temporal_anchor"), {
+                    "origin", "early", "historical", "specific_time", "recent", "current", "unknown",
+                }, fallback["temporal_anchor"]),
+                "source_policy": _allowed(parsed.get("source_policy"), {
+                    "import_preferred", "online_preferred", "balanced", "any",
+                }, fallback["source_policy"]),
+                "evidence_policy": _allowed(parsed.get("evidence_policy"), {
+                    "raw_required", "mixed", "semantic_first",
+                }, fallback["evidence_policy"]),
+            }
             record_trace(
                 "rag.query_rewriter.output",
                 trace_inputs,
-                {"raw_content": content, "rewrites": result},
+                {"raw_content": content, "plan": result},
                 run_type="llm",
             )
             return result
@@ -68,7 +99,33 @@ class QueryRewriter:
             record_trace(
                 "rag.query_rewriter.output",
                 trace_inputs,
-                {"raw_content": content, "rewrites": [query], "error": "JSONDecodeError"},
+                {"raw_content": content, "plan": fallback, "error": "JSONDecodeError"},
                 run_type="llm",
             )
-            return [query]
+            return fallback
+
+
+def _allowed(value, allowed: set[str], fallback: str) -> str:
+    value = str(value or "")
+    return value if value in allowed else fallback
+
+
+def _fallback_plan(query: str, intent: dict | None, imported_available: bool) -> dict:
+    intent = intent or {}
+    time_mode = str(intent.get("time_mode", "unknown"))
+    if time_mode not in {"early", "historical", "specific_time", "recent", "current"}:
+        time_mode = "unknown"
+    source_policy = "any"
+    if imported_available and time_mode in {"early", "historical", "specific_time"}:
+        source_policy = "import_preferred"
+    elif time_mode == "recent":
+        source_policy = "online_preferred"
+    elif imported_available and intent.get("target_subject") == "relationship":
+        source_policy = "balanced"
+    evidence_policy = "raw_required" if intent.get("needs_raw_chat") else "mixed"
+    return {
+        "queries": [query],
+        "temporal_anchor": time_mode,
+        "source_policy": source_policy,
+        "evidence_policy": evidence_policy,
+    }

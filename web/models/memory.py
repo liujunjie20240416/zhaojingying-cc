@@ -4,23 +4,6 @@ from django.utils.timezone import now
 from web.models.friend import Friend
 
 
-class EpisodicMemory(models.Model):
-    """情景记忆 — 每轮对话抽象为一个事件"""
-    friend = models.ForeignKey(Friend, on_delete=models.CASCADE)
-    summary = models.CharField(max_length=200)
-    keywords = models.CharField(max_length=200, default="")
-    importance = models.FloatField(default=0.5)
-    raw_messages = models.TextField()
-    msg_count = models.IntegerField(default=1)
-    created_at = models.DateTimeField(default=now)
-
-    class Meta:
-        db_table = "episodic_memory"
-        indexes = [
-            models.Index(fields=["friend", "-created_at"], name="ep_friend_created"),
-        ]
-
-
 class SemanticMemory(models.Model):
     """语义记忆 — 提炼的长期事实和偏好"""
     SUBJECT_CHOICES = [
@@ -48,6 +31,10 @@ class SemanticMemory(models.Model):
     friend = models.ForeignKey(Friend, on_delete=models.CASCADE)
     subject = models.CharField(max_length=20, choices=SUBJECT_CHOICES, default="user")
     fact = models.CharField(max_length=500)
+    # A stable subject for a changing fact, e.g. ``user.preference.spiciness``.
+    # Unlike fact text, this lets "喜欢辣 → 暂时不能吃 → 又能吃辣" remain one
+    # recoverable timeline instead of three unrelated rows.
+    trajectory_key = models.CharField(max_length=120, blank=True, default="")
     category = models.CharField(max_length=50, choices=CATEGORY_CHOICES, default="preference")
     confidence = models.FloatField(default=0.5)
     evidence = models.TextField(default="")
@@ -73,6 +60,7 @@ class SemanticMemory(models.Model):
             models.Index(fields=["friend", "memory_state", "is_active"], name="sem_friend_state_active"),
             models.Index(fields=["friend", "is_active", "category"], name="sem_friend_active_cat"),
             models.Index(fields=["friend", "-confidence"], name="sem_friend_conf"),
+            models.Index(fields=["friend", "trajectory_key", "is_active"], name="sem_friend_trajectory"),
         ]
 
 
@@ -101,4 +89,34 @@ class MemoryEvidence(models.Model):
         db_table = "memory_evidence"
         indexes = [
             models.Index(fields=["memory", "source_type"], name="mem_evidence_source"),
+        ]
+
+
+class ConversationCollapse(models.Model):
+    """A read-time projection of one older Online Chat range.
+
+    Raw ``Message`` rows remain authoritative.  A collapse is only a small,
+    range-addressable capsule used to find the right historical period before
+    expanding the supporting facts or raw messages.
+    """
+
+    friend = models.ForeignKey(Friend, on_delete=models.CASCADE, related_name="conversation_collapses")
+    start_message_id = models.PositiveBigIntegerField()
+    end_message_id = models.PositiveBigIntegerField()
+    summary = models.TextField(max_length=2000)
+    topics = models.JSONField(default=list, blank=True)
+    token_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(default=now)
+
+    class Meta:
+        db_table = "conversation_collapse"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["friend", "start_message_id", "end_message_id"],
+                name="unique_friend_collapse_range",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["friend", "start_message_id"], name="collapse_friend_start"),
+            models.Index(fields=["friend", "end_message_id"], name="collapse_friend_end"),
         ]

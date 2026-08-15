@@ -1,28 +1,6 @@
 import pytest
 
 
-class TestEpisodicMemory:
-    @pytest.mark.llm_integration
-    def test_extract_episodic_info(self, api_key, api_base):
-        from ai.memory.episodic import extract_episodic_info
-        result = extract_episodic_info("我今天吃了火锅，超好吃", "火锅确实很棒！你最喜欢哪家店？",
-                                       api_key=api_key, api_base=api_base)
-        assert "summary" in result
-        assert "keywords" in result
-        assert "importance" in result
-        assert len(result["summary"]) > 0
-        assert 0 <= result["importance"] <= 1
-
-    def test_write_episodic_filters_low_importance(self, api_key, api_base):
-        """低 importance 的对话应跳过不写"""
-        from unittest.mock import patch
-        from ai.memory.episodic import write_episodic
-        with patch("ai.memory.episodic.extract_episodic_info") as mock_extract:
-            mock_extract.return_value = {"summary": "test", "keywords": "test", "importance": 0.2}
-            result = write_episodic(None, "你好", "你好呀", api_key=api_key, api_base=api_base)
-            assert result is None
-
-
 class TestSemanticMemory:
     @pytest.mark.django_db
     def test_get_active_facts_empty(self):
@@ -117,6 +95,78 @@ class TestMemoryIntent:
         assert intent["time_mode"] == "early"
         assert intent["needs_raw_chat"] is True
 
+    def test_detect_when_we_met_as_early_recall(self):
+        from ai.memory.intent import detect_memory_intent
+
+        assert detect_memory_intent("咱们什么时候认识的")["time_mode"] == "early"
+
+
+@pytest.mark.django_db
+def test_origin_question_uses_earliest_imported_chunk_and_evidence():
+    from django.contrib.auth.models import User
+    from ai.agents.memory_agent import _imported_anchor_evidence, _search_time_chunks
+    from web.models.character import Character
+    from web.models.chat_message import ChatMessage
+    from web.models.import_analysis import TimeChunk
+    from web.models.user import UserProfile
+
+    profile = UserProfile.objects.create(user=User.objects.create_user(username="origin-evidence"))
+    character = Character.objects.create(
+        author=profile, name="女友", profile="温柔",
+        photo="character/photos/default.jpg", background_image="character/background_images/default.jpg",
+    )
+    TimeChunk.objects.create(character=character, label="最初相识", start_msg_index=1, end_msg_index=2)
+    TimeChunk.objects.create(character=character, label="后来聊天", start_msg_index=10, end_msg_index=20, summary="咱们吃什么")
+    ChatMessage.objects.create(character=character, sender="用户", content="你好呀", timestamp="2024-01-01", msg_index=1)
+    ChatMessage.objects.create(character=character, sender="女友", content="认识你很开心", timestamp="2024-01-01", msg_index=2)
+
+    plan = {
+        "temporal_anchor": "origin",
+        "source_policy": "import_preferred",
+    }
+    chunk = _search_time_chunks(character.id, "咱们什么时候认识的", plan)
+    evidence = _imported_anchor_evidence(
+        character.id,
+        (chunk["start_msg_index"], chunk["end_msg_index"]),
+        plan,
+    )
+
+    assert chunk["label"] == "最初相识"
+    assert evidence["source_type"] == "import_chat"
+    assert evidence["message_refs"] == [1, 2]
+
+
+def test_recall_plan_fallback_prefers_imported_history_when_available():
+    from ai.rag.query_rewriter import _fallback_plan
+
+    plan = _fallback_plan(
+        "我们最初是怎么熟起来的",
+        {"time_mode": "early", "needs_raw_chat": True, "target_subject": "relationship"},
+        imported_available=True,
+    )
+
+    assert plan["source_policy"] == "import_preferred"
+    assert plan["evidence_policy"] == "raw_required"
+
+
+def test_source_diverse_selection_keeps_imported_and_online_evidence():
+    from ai.agents.memory_agent import _select_source_diverse_hits
+
+    hits = [
+        {"source_type": "online_chat", "message_refs": [10], "content": "在线1", "score": 0.99},
+        {"source_type": "online_chat", "message_refs": [11], "content": "在线2", "score": 0.98},
+        {"source_type": "import_chat", "message_refs": [20], "content": "导入1", "score": 0.7},
+    ]
+    selected = _select_source_diverse_hits(
+        hits,
+        {"source_policy": "balanced"},
+        {"source_type": "import_chat", "message_refs": [1], "content": "最早原文", "score": 1.2},
+        limit=5,
+    )
+
+    assert selected[0]["source_type"] == "import_chat"
+    assert {hit["source_type"] for hit in selected} == {"import_chat", "online_chat"}
+
 
 class TestRelationshipOverview:
     def test_relationship_overview_fallback(self, monkeypatch):
@@ -210,3 +260,13 @@ class TestReflection:
         # 确认数据源为 Message，且支持 domain 替换
         assert "Message.objects" in source
         assert "replaces" in source
+
+    @pytest.mark.django_db
+    def test_reflection_prompt_requires_date_anchoring(self):
+        """reflection prompt 必须要求相对日期换算为绝对日期"""
+        from ai.memory.reflection import reflect_memories
+        import inspect
+        source = inspect.getsource(reflect_memories)
+        assert "日期必须锚定" in source
+        assert "绝对日期" in source
+        assert "禁止" in source or "不允许" in source

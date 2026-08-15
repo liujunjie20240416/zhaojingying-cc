@@ -7,8 +7,46 @@ from web.models.character import Character
 from web.models.friend import Friend
 from web.utils.user_profile import get_or_create_user_profile
 from ai.memory.import_access import sync_imported_context_to_friend
+from ai.memory.context_budget import context_diagnostics
+from ai.memory.semantic import build_core_memory_context
+from web.models.friend import Message, SystemPrompt
 
 router = APIRouter()
+
+
+@router.get("/api/friend/context-diagnostics/")
+def get_context_diagnostics(friend_id: int, user=Depends(get_current_user)):
+    """Return a read-only context-budget snapshot for the chat diagnostics UI."""
+    friend = Friend.objects.select_related("character").filter(
+        id=friend_id, me__user=user
+    ).first()
+    if not friend:
+        raise ApiError(404, "friend_not_found", "好友不存在")
+
+    recent = list(Message.objects.filter(friend=friend).order_by("-id")[:30])
+    recent.reverse()
+    recent_text = "\n".join(
+        f"用户：{message.user_message}\nAI：{message.output}"
+        for message in recent
+    )
+    base_prompt = "".join(
+        prompt.prompt
+        for prompt in SystemPrompt.objects.filter(title="回复").order_by("order_number")
+    )
+    last_usage = Message.objects.filter(friend=friend).order_by("-id").values_list(
+        "input_tokens", flat=True
+    ).first() or 0
+    diagnostics = context_diagnostics({
+        "base_prompt": base_prompt,
+        "character_profile": friend.character.profile,
+        "style_profile": friend.character.style_profile,
+        "working_summary": friend.conversation_summary,
+        "core_memory": build_core_memory_context(friend.id),
+        "recent_online_chat": recent_text,
+    }, last_usage=last_usage)
+    diagnostics["recent_online_turns"] = len(recent)
+    diagnostics["summary_through_message_id"] = friend.summary_through_message_id
+    return {"result": "success", "diagnostics": diagnostics}
 
 
 @router.get("/api/friend/get_list/")

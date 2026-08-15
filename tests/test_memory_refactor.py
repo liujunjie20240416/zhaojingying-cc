@@ -263,6 +263,17 @@ def test_fragment_evidence_indices_are_validated():
     }]
 
 
+def test_chunk_analyzer_prompt_requires_date_anchoring():
+    """导入提取 prompt 必须要求相对日期结合消息时间戳换算为绝对日期。"""
+    import inspect
+    from ai.preprocessing.chunk_analyzer import _do_analyze
+
+    source = inspect.getsource(_do_analyze)
+    assert "日期必须锚定" in source
+    assert "绝对日期" in source
+    assert "时间戳" in source
+
+
 @pytest.mark.django_db
 def test_memory_evidence_deduplicates_message_refs():
     from django.contrib.auth.models import User
@@ -437,7 +448,10 @@ def test_conversation_context_compacts_old_turns_and_restores_latest_ten(monkeyp
     friend = Friend.objects.create(me=profile, character=character)
     rows = [
         Message.objects.create(
-            friend=friend, user_message=f"用户{index}", input="", output=f"回复{index}"
+            friend=friend,
+            user_message=f"用户{index}" + "问" * 500,
+            input="",
+            output=f"回复{index}" + "答" * 500,
         )
         for index in range(16)
     ]
@@ -456,6 +470,63 @@ def test_conversation_context_compacts_old_turns_and_restores_latest_ten(monkeyp
     assert summary.startswith("较早对话摘要")
     assert [message.id for message in recent] == [message.id for message in rows[-10:]]
     assert friend.summary_through_message_id == rows[5].id
+
+
+@pytest.mark.django_db
+def test_concurrent_fold_requester_does_not_fold_again(monkeypatch):
+    """Stale checkpoint readers must not re-fold the same range.
+
+    Two chat requests on the same Friend can both read the checkpoint before
+    either saves.  The loser must re-read the checkpoint under the per-friend
+    lock and find nothing left to fold — otherwise the same range is folded
+    twice with different bases and the checkpoint rolls backward.
+    """
+    from django.contrib.auth.models import User
+    from ai.memory.conversation_summary import prepare_conversation_context
+    from web.models.character import Character
+    from web.models.friend import Friend, Message
+    from web.models.user import UserProfile
+
+    profile = UserProfile.objects.create(
+        user=User.objects.create_user(username="context-race")
+    )
+    character = Character.objects.create(
+        author=profile, name="女友", profile="温柔",
+        photo="character/photos/default.jpg",
+        background_image="character/background_images/default.jpg",
+    )
+    friend = Friend.objects.create(me=profile, character=character)
+    rows = [
+        Message.objects.create(
+            friend=friend,
+            user_message=f"用户{index}" + "问" * 400,
+            input="",
+            output=f"回复{index}" + "答" * 400,
+        )
+        for index in range(14)
+    ]
+    calls = []
+
+    def summarize(previous, batch, *args, **kwargs):
+        calls.append([message.id for message in batch])
+        return "较早对话摘要：并发折叠被正确去重。"
+
+    monkeypatch.setattr("ai.memory.conversation_summary._summarize_batch", summarize)
+
+    # A concurrent request would have read the Friend row before the fold
+    # saved its checkpoint — model it with a stale instance.
+    stale = Friend.objects.get(id=friend.id)
+
+    summary, recent = prepare_conversation_context(friend)
+    summary2, recent2 = prepare_conversation_context(stale)
+    stale.refresh_from_db()
+
+    assert calls == [[message.id for message in rows[:4]]]
+    assert summary == summary2
+    assert summary2.startswith("较早对话摘要")
+    assert [message.id for message in recent] == [message.id for message in rows[-10:]]
+    assert len(recent2) == len(recent)
+    assert stale.summary_through_message_id == rows[3].id
 
 
 def test_conversation_prompt_includes_older_conversation_summary(monkeypatch):

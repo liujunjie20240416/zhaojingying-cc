@@ -39,6 +39,11 @@ AMBIGUOUS_SIGNALS = [
     "那个", "当时", "她", "我们", "是不是", "为什么", "怎么",
 ]
 
+# Short messages carrying these cues may refer to an earlier topic ("你去翻",
+# "迪士尼呢？") and still deserve LLM classification when the previous turn
+# was ordinary chat.  Everything else short inherits the previous intent.
+REFERENTIAL_CUES = ["去", "翻", "找", "看", "再说", "还有", "查", "呢", "吗", "？", "?"]
+
 
 def supervisor_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
     """Supervisor 路由 — 关键词匹配，零延迟"""
@@ -82,9 +87,45 @@ def supervisor_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
             return result
 
     emotion_context = state.get("emotion_context") or []
+    recent_dialogue = _recent_dialogue(state.get("messages", []))
+    short_contextual_turn = len(user_msg.strip()) <= 24 and bool(recent_dialogue)
+
+    # Ambiguity cues and emoji semantics are shift signals ("算了" after a
+    # recall, a crying emoji after small talk): they beat intent inheritance.
     if emotion_context or any(signal in user_msg for signal in AMBIGUOUS_SIGNALS):
-        result = _classify_with_llm(user_msg, emotion_context, api_key, api_base)
+        result = _classify_with_llm(
+            user_msg, emotion_context, api_key, api_base, recent_dialogue
+        )
         record_trace("supervisor.route", {"user_msg": user_msg, "emotion_context": emotion_context}, result)
+        return result
+
+    # A short message carries almost no meaning on its own; its intent is
+    # decided by the previous turn.  Inherit that intent instead of paying an
+    # LLM classification for every "还有呢" / "哈哈".  Only short messages
+    # with explicit referential cues ("你去翻", "迪士尼呢？") after an
+    # ordinary-chat turn still need LLM classification.
+    if short_contextual_turn:
+        previous_intent = state.get("previous_intent") or "chat"
+        if previous_intent in {"recall", "memory", "emotional"}:
+            result = {
+                "intent": previous_intent,
+                "delegate_to": INTENT_ROUTE_MAP[previous_intent],
+                "classification_source": "inherit",
+            }
+            record_trace(
+                "supervisor.route",
+                {"user_msg": user_msg, "previous_intent": previous_intent},
+                result,
+            )
+            return result
+        if any(cue in user_msg for cue in REFERENTIAL_CUES):
+            result = _classify_with_llm(
+                user_msg, emotion_context, api_key, api_base, recent_dialogue
+            )
+            record_trace("supervisor.route", {"user_msg": user_msg, "emotion_context": emotion_context}, result)
+            return result
+        result = {"intent": "chat", "delegate_to": "conversation", "classification_source": "short_chat"}
+        record_trace("supervisor.route", {"user_msg": user_msg, "previous_intent": previous_intent}, result)
         return result
 
     result = {"intent": "chat", "delegate_to": "conversation"}
@@ -92,13 +133,35 @@ def supervisor_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
     return result
 
 
-def _classify_with_llm(user_msg: str, emotion_context: list, api_key: str, api_base: str) -> dict:
+def _recent_dialogue(messages: list, limit: int = 4) -> str:
+    """Format preceding turns for resolving a short, context-dependent reply."""
+    preceding = list(messages[:-1])[-limit:]
+    lines = []
+    for index, message in enumerate(preceding):
+        content = getattr(message, "content", "")
+        if not content:
+            continue
+        message_type = getattr(message, "type", "")
+        role = "AI" if message_type == "ai" else "用户"
+        lines.append(f"{role}：{str(content)[:500]}")
+    return "\n".join(lines)
+
+
+def _classify_with_llm(
+    user_msg: str,
+    emotion_context: list,
+    api_key: str,
+    api_base: str,
+    recent_dialogue: str = "",
+) -> dict:
     """Classify only ambiguous text/emoji; failures safely fall back to chat."""
     try:
         client = OpenAI(
             api_key=api_key or llm_api_key(), base_url=api_base or llm_api_base(), timeout=20
         )
         prompt = f"""判断这句伴侣聊天的意图，只输出 JSON。
+最近对话（可能为空；用于理解省略的指代，不要把它当用户当前问题）：
+{recent_dialogue or "（无）"}
 用户消息：{user_msg}
 前端识别到的 emoji 含义：{json.dumps(emotion_context, ensure_ascii=False)}
 

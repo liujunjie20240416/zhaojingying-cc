@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import uuid
 
 import lancedb
@@ -10,6 +11,7 @@ from django.utils.timezone import now
 from langchain_community.vectorstores import LanceDB
 
 from ai.custom_embeddings import CustomEmbeddings
+from ai.memory.time_anchor import find_unanchored_relative_time
 from ai.rag.scoring import lance_distance_to_relevance
 from web.models.friend import Friend
 from web.models.memory import MemoryEvidence, SemanticMemory
@@ -34,6 +36,43 @@ CATEGORY_LABELS = {
 VALID_SUBJECTS = set(SUBJECT_LABELS)
 VALID_CATEGORIES = set(CATEGORY_LABELS)
 VALID_MEMORY_STATES = {"current", "historical", "superseded"}
+
+
+def build_core_memory_context(friend_id: int, max_chars: int = 1400) -> str:
+    """Build a small, stable profile for every reply without an LLM call.
+
+    This intentionally differs from ``Friend.memory``: it selects one current
+    high-confidence fact per subject/category, prioritising user-locked facts,
+    and is assembled at read time so stale compatibility-cache text is never
+    injected into the model.
+    """
+    facts = list(SemanticMemory.objects.filter(
+        friend_id=friend_id,
+        is_active=True,
+        memory_state="current",
+    ).order_by("subject", "category", "-is_locked", "-confidence", "-updated_at", "-id"))
+    selected: dict[tuple[str, str], SemanticMemory] = {}
+    # 优先选带绝对日期的事实：只含"本周/当天"这类相对时间的事实会在后续
+    # 对话中显得仍然有效，实际早已过期。第一遍只选已锚定事实，第二遍用
+    # 未锚定事实补齐空缺槽位，避免该槽位整体缺失。
+    for fact in facts:
+        if find_unanchored_relative_time(fact.fact):
+            continue
+        selected.setdefault((fact.subject, fact.category), fact)
+    for fact in facts:
+        selected.setdefault((fact.subject, fact.category), fact)
+
+    parts: list[str] = []
+    for subject in ("user", "girlfriend", "relationship"):
+        lines = []
+        for category in ("identity", "preference", "experience", "relationship"):
+            fact = selected.get((subject, category))
+            if fact:
+                lines.append(f"- {fact.fact}")
+        if lines:
+            parts.append(f"【{SUBJECT_LABELS[subject]}核心画像】\n" + "\n".join(lines))
+
+    return "\n\n".join(parts)[:max_chars]
 
 
 def _table_names(db) -> set[str]:
@@ -235,6 +274,7 @@ def add_fact(
     memory_state: str = "current",
     valid_from=None,
     valid_to=None,
+    trajectory_key: str = "",
     index: bool = True,
 ):
     """添加新事实，同时向量化到 LanceDB"""
@@ -248,11 +288,13 @@ def add_fact(
         memory_state = "current"
     if valid_from is None and memory_state == "current":
         valid_from = now()
+    trajectory_key = _normalize_trajectory_key(trajectory_key)
     sm = SemanticMemory.objects.create(
         friend=friend, fact=fact, subject=subject, category=category,
         confidence=confidence, evidence=evidence, source=source,
         is_locked=is_locked, is_mutable=is_mutable,
         memory_state=memory_state, valid_from=valid_from, valid_to=valid_to,
+        trajectory_key=trajectory_key,
     )
     if index:
         _index_fact(friend.id, fact, sm.id)
@@ -264,10 +306,15 @@ def resolve_conflict(
     old_fact: str,
     new_fact: str,
     *,
+    trajectory_key: str = "",
     index: bool = True,
 ):
     """冲突解决：旧事实转为历史状态，新事实成为当前状态。"""
-    old_sm = SemanticMemory.objects.filter(friend_id=friend_id, fact=old_fact, is_active=True).first()
+    # Include historical states too: a later "又能吃辣了" can reconnect to the
+    # earlier spicy-food trajectory instead of starting a disconnected fact.
+    old_sm = SemanticMemory.objects.filter(
+        friend_id=friend_id, fact=old_fact, is_active=True
+    ).order_by("-valid_from", "-id").first()
     if old_sm and (old_sm.is_locked or not old_sm.is_mutable):
         new_sm = SemanticMemory.objects.create(
             friend_id=friend_id, fact=new_fact, subject=old_sm.subject,
@@ -275,6 +322,7 @@ def resolve_conflict(
             evidence=f"Potential conflict with locked fact: {old_fact}",
             is_mutable=old_sm.is_mutable, is_locked=old_sm.is_locked,
             memory_state="current", valid_from=now(),
+            trajectory_key=_normalize_trajectory_key(trajectory_key) or old_sm.trajectory_key,
         )
         if index:
             _index_fact(friend_id, new_fact, new_sm.id)
@@ -287,10 +335,12 @@ def resolve_conflict(
         evidence=f"Updated from: {old_fact}",
         is_mutable=old_sm.is_mutable if old_sm else True,
         memory_state="current", valid_from=current_time,
+        trajectory_key=_normalize_trajectory_key(trajectory_key) or (old_sm.trajectory_key if old_sm else ""),
     )
     if old_sm:
-        old_sm.memory_state = "historical"
-        old_sm.valid_to = current_time
+        if old_sm.memory_state == "current":
+            old_sm.memory_state = "historical"
+            old_sm.valid_to = current_time
         old_sm.replaced_by = new_sm
         old_sm.save(update_fields=["memory_state", "valid_to", "replaced_by", "updated_at"])
     if index:
@@ -342,6 +392,7 @@ def search_semantic(
                         "confidence": sm.confidence, "source": "keyword",
                         "subject": sm.subject, "is_locked": sm.is_locked,
                         "is_mutable": sm.is_mutable, "memory_state": sm.memory_state,
+                        "trajectory_key": sm.trajectory_key,
                         "score": 1.0 if sm.memory_state == "current" else 0.55,
                     }
 
@@ -367,6 +418,7 @@ def search_semantic(
                         "confidence": sm.confidence, "source": "semantic",
                         "subject": sm.subject, "is_locked": sm.is_locked,
                         "is_mutable": sm.is_mutable, "memory_state": sm.memory_state,
+                        "trajectory_key": sm.trajectory_key,
                         "score": (
                             lance_distance_to_relevance(score)
                             if sm.memory_state == "current"
@@ -383,6 +435,46 @@ def search_semantic(
         reverse=True,
     )
     return sorted_results[:top_k]
+
+
+def expand_state_trajectories(friend_id: int, results: list[dict], *, limit: int = 12) -> list[dict]:
+    """Expand retrieved changing facts to their whole known state sequence.
+
+    The expansion is intentionally query-triggered.  Casual chat still gets
+    only compact current facts; questions about a past state or its evolution
+    get all linked states in chronological order.
+    """
+    keys = {item.get("trajectory_key", "") for item in results if item.get("trajectory_key")}
+    if not keys:
+        return results[:limit]
+    linked = SemanticMemory.objects.filter(
+        friend_id=friend_id, is_active=True, trajectory_key__in=keys
+    ).order_by("trajectory_key", "valid_from", "created_at", "id")
+    by_id = {item["id"]: item for item in results}
+    for sm in linked:
+        by_id.setdefault(sm.id, {
+            "id": sm.id, "fact": sm.fact, "category": sm.category,
+            "confidence": sm.confidence, "source": "trajectory",
+            "subject": sm.subject, "is_locked": sm.is_locked,
+            "is_mutable": sm.is_mutable, "memory_state": sm.memory_state,
+            "trajectory_key": sm.trajectory_key, "score": 0.5,
+            "valid_from": sm.valid_from, "valid_to": sm.valid_to,
+        })
+    # Keep retrieval relevance first, then append the missing chronological
+    # states; preserving the chain matters more than an arbitrary current bias.
+    ordered = list(results)
+    seen = {item["id"] for item in ordered}
+    for item in by_id.values():
+        if item["id"] not in seen:
+            ordered.append(item)
+    return ordered[:limit]
+
+
+def _normalize_trajectory_key(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if re.fullmatch(r"[a-z][a-z0-9_.-]{1,119}", normalized):
+        return normalized
+    return ""
 
 
 def sync_friend_memory_cache(friend: Friend):

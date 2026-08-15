@@ -9,7 +9,7 @@ from rest_framework_simplejwt.tokens import AccessToken
 from main import app
 from web.models.character import Character
 from web.models.friend import Friend, Message, MessageAttachment
-from web.models.memory import EpisodicMemory, MemoryEvidence, SemanticMemory
+from web.models.memory import MemoryEvidence, SemanticMemory
 from web.models.reflection_job import ReflectionJob
 from web.models.user import UserProfile
 
@@ -92,11 +92,6 @@ def test_clear_history_deletes_online_derivatives_but_preserves_import_and_user_
     attachment.file.save("clear-me.webp", ContentFile(b"private"), save=False)
     attachment.save()
     attachment_path = attachment.file.path
-    EpisodicMemory.objects.create(
-        friend=friend,
-        summary="用户谈到饮食偏好",
-        raw_messages="[]",
-    )
     ReflectionJob.objects.create(
         friend=friend,
         chat_day=datetime.date(2026, 7, 14),
@@ -128,7 +123,6 @@ def test_clear_history_deletes_online_derivatives_but_preserves_import_and_user_
         "attachments": 1,
         "semantic_memories": 1,
         "online_evidences": 2,
-        "episodic_memories": 1,
         "reflection_jobs": 1,
     }
     assert not Message.objects.filter(friend=friend).exists()
@@ -141,7 +135,6 @@ def test_clear_history_deletes_online_derivatives_but_preserves_import_and_user_
     assert not MessageAttachment.objects.filter(id=attachment.id).exists()
     assert not attachment.file.storage.exists(attachment.file.name)
     assert attachment_path.startswith(str(tmp_path))
-    assert not EpisodicMemory.objects.filter(friend=friend).exists()
     assert not ReflectionJob.objects.filter(friend=friend).exists()
 
     friend.refresh_from_db()

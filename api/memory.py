@@ -27,6 +27,7 @@ def _serialize(memory: SemanticMemory) -> dict:
         "confidence": memory.confidence,
         "source": memory.source,
         "memory_state": memory.memory_state,
+        "trajectory_key": memory.trajectory_key,
         "is_locked": memory.is_locked,
         "is_mutable": memory.is_mutable,
         "valid_from": memory.valid_from,

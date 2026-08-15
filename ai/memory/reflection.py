@@ -2,7 +2,7 @@
 """Reflection - 从原始对话直接提炼 Semantic Memory。
 
 触发条件: 距上次 reflection >= 6 小时，且有新对话。
-不再经过 EpisodicMemory 中间层，LLM 直接看完整的用户-AI对话。
+LLM 直接看完整的用户-AI 对话（Online Chat 原文），不经过中间摘要层。
 """
 import json
 from django.db import transaction
@@ -35,6 +35,24 @@ def _get_client(api_key: str = "", api_base: str = ""):
     if not api_key and not api_base:
         require_llm_config()
     return OpenAI(api_key=api_key or llm_api_key(), base_url=api_base or llm_api_base())
+
+
+def _build_dialogue_text(messages: list) -> str:
+    """Render one chat day as timestamped dialogue lines for the model.
+
+    Per-message timestamps let the extraction model convert relative dates
+    ("我生日是明天") into absolute ones ("生日是2026年8月15日") instead of
+    freezing them into the stored fact.
+    """
+    lines = []
+    for i, m in enumerate(messages):
+        if getattr(m, "create_time", None):
+            ts = m.create_time.strftime("%Y-%m-%d %H:%M")
+        else:
+            ts = "未知时间"
+        lines.append(f"{i+1}. [message_id={m.id}][{ts}] 用户: {m.user_message}")
+        lines.append(f"   [message_id={m.id}][{ts}] AI: {m.output}")
+    return "\n".join(lines)
 
 
 def _build_existing_facts_text(friend_id: int) -> str:
@@ -128,12 +146,8 @@ def reflect_memories(
 
     client = _get_client(api_key, api_base)
 
-    # 拼成对话文本
-    dialogue_lines = []
-    for i, m in enumerate(messages):
-        dialogue_lines.append(f"{i+1}. [message_id={m.id}] 用户: {m.user_message}")
-        dialogue_lines.append(f"   [message_id={m.id}] AI: {m.output}")
-    dialogue_text = "\n".join(dialogue_lines)
+    # 拼成对话文本（带时间戳，供模型把相对日期换算成绝对日期）
+    dialogue_text = _build_dialogue_text(messages)
 
     # 全部已有事实（按分类分组）
     existing_text = _build_existing_facts_text(friend.id)
@@ -165,6 +179,7 @@ def reflect_memories(
     "fact": "关于用户的一句事实",
     "subject": "user|girlfriend|relationship",
     "category": "identity|preference|experience|relationship",
+    "trajectory_key": "可变化事实的稳定英文键，如 user.preference.spiciness；不确定填空字符串",
     "confidence": 0.8,
     "conflicts_with": null,
     "replaces": [],
@@ -175,6 +190,7 @@ def reflect_memories(
 字段说明：
 - fact: 新事实（必须明确指明是"用户"，不要跟AI角色混淆）
 - confidence: 0.0-1.0，根据证据充分程度判断
+- trajectory_key: 仅 preference / relationship 这类可能多次变化的同一维度填写。它必须稳定、简短、小写英文点号键；同一条状态演变始终复用同一个键。identity / experience 为空字符串。
 - conflicts_with: 与已有事实中某条精确冲突，填该事实的原文。null表示无精确冲突
 - replaces: 【重要】如果新事实使得某些同领域的旧事实成为历史状态了（比如口味变化、关系规律变化），把旧事实原文列在这里。必须是同类型（preference替换preference，relationship替换relationship），identity和experience不要替换
 - evidence_message_ids: 只填写直接支持该事实的真实 message_id；禁止虚构编号
@@ -190,7 +206,9 @@ def reflect_memories(
 8. 用户说"又/恢复/重新可以"时，表示状态回归或再次变化，旧状态应进入 replaces
 9. 生日、出生地、过去发生过的经历不可替换；职业、城市、学校、作息、口味可以在明确表达时更新
 10. 不要把少量测试消息、重复问候、无意义字符，提炼为长期偏好或互动规律；除非这种模式在多轮、多天中反复出现
-11. 两人共同约定、共同事件和互动模式必须使用 subject=relationship；AI角色自身信息使用 subject=girlfriend"""
+11. 两人共同约定、共同事件和互动模式必须使用 subject=relationship；AI角色自身信息使用 subject=girlfriend
+12. 日期必须锚定：对话中的相对时间（今天/昨天/本周/上周/这个月/今年/当天等）写入 fact 时必须结合消息时间戳换算成绝对日期。例如 2026-08-14 的对话说"我生日是明天"，应写"用户生日是2026年8月15日"，而不是"用户生日是明天"
+13. 无法精确换算出绝对日期时写"约X月X日（推断）"；身份类事实（生日/出生地/纪念日）绝不允许用"本周/今年/当天"这类相对时间作为唯一时间信息"""
 
     trace_inputs = {
         "model": llm_model(),
@@ -251,6 +269,7 @@ def reflect_memories(
             subject = str(item.get("subject", "user"))
             if subject not in ("user", "girlfriend", "relationship"):
                 subject = "user"
+            trajectory_key = str(item.get("trajectory_key", "")).strip()
 
             replaces = item.get("replaces")
             if isinstance(replaces, list):
@@ -269,6 +288,7 @@ def reflect_memories(
                     current_friend.id,
                     conflicts,
                     fact_text,
+                    trajectory_key=trajectory_key,
                     index=False,
                 )
                 if conflicts not in all_replaces:
@@ -285,6 +305,7 @@ def reflect_memories(
                         f"来自 {processed_chat_day} 的在线聊天 Reflection"
                         if processed_chat_day else "来自在线聊天 Reflection"
                     ),
+                    trajectory_key=trajectory_key,
                     index=False,
                 )
 

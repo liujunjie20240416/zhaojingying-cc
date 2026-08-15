@@ -17,11 +17,20 @@ def detect_memory_intent(user_msg: str) -> dict:
     category_hint = _detect_category(text)
     needs_raw_chat = _needs_raw_chat(text, time_mode)
     return {
+        "request_mode": _detect_request_mode(text),
         "target_subject": target_subject,
         "time_mode": time_mode,
         "category_hint": category_hint,
         "needs_raw_chat": needs_raw_chat,
+        "needs_lightweight_recall": _needs_lightweight_recall(text),
+        "needs_state_trajectory": _needs_state_trajectory(text, time_mode),
     }
+
+
+def _detect_request_mode(text: str) -> str:
+    if any(word in text for word in ["原话", "逐字", "怎么说", "说了什么", "原本怎么讲"]):
+        return "quote"
+    return "recall" if _needs_raw_chat(text, _detect_time_mode(text)) else "chat"
 
 
 def _detect_subject(text: str) -> str:
@@ -40,7 +49,7 @@ def _detect_subject(text: str) -> str:
 def _detect_time_mode(text: str) -> str:
     if re.search(r"\d{4}年|\d{1,2}月|\d{1,2}号|\d{4}-\d{1,2}", text):
         return "specific_time"
-    if any(word in text for word in ["刚认识", "最开始", "第一次", "刚加", "初识"]):
+    if any(word in text for word in ["刚认识", "最开始", "第一次", "刚加", "初识", "什么时候认识", "何时认识", "相识"]):
         return "early"
     if any(word in text for word in ["以前", "那时候", "当时", "之前", "曾经", "过去", "上次"]):
         return "historical"
@@ -64,5 +73,22 @@ def _detect_category(text: str) -> str:
 
 
 def _needs_raw_chat(text: str, time_mode: str) -> bool:
-    recall_words = ["记得", "原话", "说过", "聊过", "那次", "什么时候", "哪天"]
+    recall_words = ["记得", "原话", "说过", "聊过", "那次", "什么时候", "哪天", "答应", "那个", "这件事"]
     return time_mode in {"historical", "early", "specific_time"} or any(word in text for word in recall_words)
+
+
+def _needs_lightweight_recall(text: str) -> bool:
+    """Catch implicit references without searching on ordinary small talk."""
+    contextual_signals = [
+        "那个", "这件事", "上回", "之前", "答应", "作业", "课表",
+        "后来", "还没", "结果", "怎么回事", "你说的",
+    ]
+    return any(signal in text for signal in contextual_signals)
+
+
+def _needs_state_trajectory(text: str, time_mode: str) -> bool:
+    """Whether the user asks for how a state changed, not just its current value."""
+    evolution_words = ["又", "恢复", "重新", "变化", "变成", "从", "到", "过程", "一直", "后来"]
+    return time_mode in {"historical", "early", "specific_time"} or any(
+        word in text for word in evolution_words
+    )

@@ -8,11 +8,12 @@ import Microphone from "@/components/character/chat_field/input_field/Microphone
 import {detectUserEmojiContext} from "@/js/utils/emotionEmoji.js";
 import {getApiErrorMessage} from "@/js/http/errors.js";
 const props = defineProps(['friendId'])
-const emit = defineEmits(['pushBackMessage','addToLastMessage','setLastMessageBubbles','connectionOnline','connectionError','typingFinished'])
+const emit = defineEmits(['pushBackMessage','addToLastMessage','setLastMessageBubbles','connectionOnline','connectionError','typingFinished','replyProvenance'])
 const inputRef = useTemplateRef('input-ref')
 const message=ref('')
-let processId = 0
-let streamAbortController = null
+const streamAbortControllers = new Map()
+let latestResponseId = null
+let latestAudioResponseId = null
 const showMic = ref(false)
 let audioPreparedForNextResponse = false
 const imageInputRef = useTemplateRef('image-input-ref')
@@ -142,7 +143,7 @@ const handleAudioChunk = (base64Data) => {  // 将语音片段添加到播放器
 };
 
 onUnmounted(() => {
-    cancelCurrentRequest()
+    cancelAllRequests()
     audioPlayer.pause();
     audioPlayer.src = '';
     pendingImages.value.forEach(item => URL.revokeObjectURL(item.preview))
@@ -173,7 +174,7 @@ async function handleSend(event,audio_msg){
     return
   }
 
-  const curId = ++ processId
+  const responseId = crypto.randomUUID()
   const createdAt = new Date().toISOString()
   message.value = ''
   pendingImages.value.forEach(item => URL.revokeObjectURL(item.preview))
@@ -181,9 +182,11 @@ async function handleSend(event,audio_msg){
   uploading.value=false
   emit('connectionOnline')
   emit('pushBackMessage',{role:'user',content:content,attachments,id:crypto.randomUUID(),createdAt})
-  emit('pushBackMessage',{role:'ai',content:'',id:crypto.randomUUID(),createdAt,isTyping:true})
+  emit('pushBackMessage',{role:'ai',content:'',id:responseId,createdAt,isTyping:true})
   const controller = new AbortController()
-  streamAbortController = controller
+  streamAbortControllers.set(responseId, controller)
+  latestResponseId = responseId
+  latestAudioResponseId = responseId
   try {
     await streamApi('/api/friend/message/chat/', {
       signal: controller.signal,
@@ -194,45 +197,61 @@ async function handleSend(event,audio_msg){
         emotion_context: detectUserEmojiContext(content),
       },
       onmessage(data, isDone) {
-        if (curId !== processId) {
+        if (isDone) {
+          emit('typingFinished', {responseId})
           return
         }
-        if (isDone) {
-          emit('typingFinished')
+        if (data.error) {
+          emit('connectionError', {responseId, message: data.error.message || 'AI 回复生成失败，请重试'})
           return
         }
         if (data.content) {
-          emit('addToLastMessage',data.content)
+          emit('addToLastMessage', {responseId, delta: data.content})
         }
         if (data.bubbles) {
-          emit('setLastMessageBubbles', data.bubbles)
+          emit('setLastMessageBubbles', {responseId, bubbles: data.bubbles})
         }
-        if(data.audio){
+        if (data.reply_provenance) {
+          emit('replyProvenance', {responseId, provenance: data.reply_provenance})
+        }
+        // One browser audio player cannot safely interleave two TTS streams.
+        // Keep the latest request audible while still rendering every response.
+        if(data.audio && latestAudioResponseId === responseId){
           handleAudioChunk(data.audio)
         }
       },
       onerror(err) {
-        if (err?.name !== 'AbortError') emit('connectionError')
+        if (err?.name !== 'AbortError') emit('connectionError', {responseId})
       },
     })
   } catch (err) {
-    if (err?.name !== 'AbortError') emit('connectionError')
+    if (err?.name !== 'AbortError') emit('connectionError', {responseId})
   } finally {
-    if (streamAbortController === controller) streamAbortController = null
+    streamAbortControllers.delete(responseId)
+    if (latestResponseId === responseId) latestResponseId = null
   }
 }
 function focus(){
   inputRef.value.focus()
 }
 function close() {
-  cancelCurrentRequest()
+  cancelAllRequests()
   showMic.value = false
 }
 
 function cancelCurrentRequest() {
-  ++ processId
-  streamAbortController?.abort()
-  streamAbortController = null
+  if (latestResponseId) streamAbortControllers.get(latestResponseId)?.abort()
+  latestResponseId = null
+  latestAudioResponseId = null
+  audioPreparedForNextResponse = false
+  stopAudio()
+}
+
+function cancelAllRequests() {
+  streamAbortControllers.forEach(controller => controller.abort())
+  streamAbortControllers.clear()
+  latestResponseId = null
+  latestAudioResponseId = null
   audioPreparedForNextResponse = false
   stopAudio()
 }
@@ -261,6 +280,7 @@ defineExpose(
       focus,
       close,
       cancelCurrentRequest,
+      cancelAllRequests,
     }
 )
 </script>

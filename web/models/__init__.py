@@ -1,4 +1,4 @@
-from web.models.memory import EpisodicMemory, MemoryEvidence, SemanticMemory
+from web.models.memory import ConversationCollapse, MemoryEvidence, SemanticMemory
 from web.models.import_analysis import (
     ImportAnalysis,
     PreprocessingCheckpoint,

@@ -42,21 +42,31 @@ def emotion_agent_node(state: dict, api_key: str = "", api_base: str = "") -> di
         trace_inputs,
         metadata=state.get("trace_metadata", {}),
     )
-    resp = client.chat.completions.create(
-        model=llm_model(), messages=[{"role": "user", "content": prompt}],
-        temperature=0.0, max_tokens=500,
-    )
-    content = resp.choices[0].message.content.strip()
-    if content.startswith("```"):
-        content = content.split("\n", 1)[1]
-        if "```" in content:
-            content = content.rsplit("```", 1)[0]
-        content = content.strip()
-
     try:
+        resp = client.chat.completions.create(
+            model=llm_model(), messages=[{"role": "user", "content": prompt}],
+            temperature=0.0, max_tokens=500,
+        )
+        content = resp.choices[0].message.content.strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1]
+            if "```" in content:
+                content = content.rsplit("```", 1)[0]
+            content = content.strip()
         analysis = json.loads(content)
-    except json.JSONDecodeError:
+    except Exception:
+        # Match the degradation contract of the other LLM calls in the graph
+        # (supervisor classification, query rewriter, compressor): a failed
+        # emotion analysis must not take down the whole turn.
+        content = ""
         analysis = {"emotion": "neutral", "intensity": 3, "suggested_tone": "gentle", "should_comfort": False}
+        record_trace(
+            "emotion_agent.fallback",
+            trace_inputs,
+            {"analysis": analysis, "error": "emotion_analysis_failed"},
+            run_type="llm",
+            metadata=state.get("trace_metadata", {}),
+        )
 
     record_trace(
         "emotion_agent.output",

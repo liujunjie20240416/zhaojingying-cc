@@ -15,7 +15,7 @@ from api.deps import get_current_user
 from api.errors import ApiError
 from api.schemas import RemoveFriendRequest
 from web.models.friend import Message, Friend, MessageAttachment
-from web.models.memory import EpisodicMemory, MemoryEvidence, SemanticMemory
+from web.models.memory import MemoryEvidence, SemanticMemory
 from web.models.reflection_job import ReflectionJob
 from ai.memory.history_search import drop_online_history_index
 from ai.memory.semantic import delete_semantic_index_entries
@@ -123,6 +123,7 @@ def get_history(
                 "user_message": m.user_message,
                 "output": m.output,
                 "output_bubbles": m.output_bubbles or ([m.output] if m.output else []),
+                "reply_provenance": m.reply_provenance or {},
                 "create_time": localtime(m.create_time).isoformat(),
                 "attachments": [_attachment_payload(a) for a in m.attachments.all()],
             }
@@ -165,14 +166,12 @@ def clear_history(
                     memory__friend=friend,
                     source_type="online_chat",
                 ).count(),
-                "episodic_memories": EpisodicMemory.objects.filter(friend=friend).count(),
                 "reflection_jobs": ReflectionJob.objects.filter(friend=friend).count(),
             }
             Message.objects.filter(friend=friend).delete()
             # Also remove uploads that were never attached to a completed Message.
             MessageAttachment.objects.filter(friend=friend).delete()
             ReflectionJob.objects.filter(friend=friend).delete()
-            EpisodicMemory.objects.filter(friend=friend).delete()
             MemoryEvidence.objects.filter(
                 memory__friend=friend,
                 source_type="online_chat",

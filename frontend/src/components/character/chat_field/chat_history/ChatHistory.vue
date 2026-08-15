@@ -80,6 +80,7 @@ async function loadMore(){
           role:'ai',
           content:m.output,
           bubbles:m.output_bubbles || (m.output ? [m.output] : []),
+          replyProvenance:m.reply_provenance || {},
           id:crypto.randomUUID(),
           createdAt:m.create_time,
         })

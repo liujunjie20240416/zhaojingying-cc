@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 import threading
 import uuid
 from queue import Queue
@@ -10,6 +11,8 @@ from django.db import transaction
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, AIMessage
+
+logger = logging.getLogger(__name__)
 
 from ai.config import dashscope_api_key, dashscope_wss_url
 from api.deps import get_current_user
@@ -24,6 +27,7 @@ from ai.memory.reflection_jobs import (
 )
 from ai.memory.history_search import index_online_message
 from ai.memory.conversation_summary import prepare_conversation_context
+from ai.memory.semantic import build_core_memory_context
 from ai.tracing import record_trace, serialize_messages
 from ai.tools.time_tools import format_current_time_context
 
@@ -42,6 +46,13 @@ async def tts_sender(app, inputs, mq, ws, task_id):
         },
     )
     final_message = result.get("messages", [])[-1]
+    if result.get("context_diagnostics"):
+        mq.put_nowait({"context_diagnostics": result["context_diagnostics"]})
+    # Persist the classified intent so the next short follow-up can inherit it
+    # without paying another LLM classification.
+    provenance = dict(result.get("reply_provenance", inputs.get("reply_provenance", {})))
+    provenance["supervisor_intent"] = result.get("intent", "chat")
+    mq.put_nowait({"reply_provenance": provenance})
     bubbles = list((getattr(final_message, "additional_kwargs", {}) or {}).get("bubbles") or [])
     if not bubbles and getattr(final_message, "content", ""):
         bubbles = [str(final_message.content)]
@@ -132,6 +143,12 @@ async def run_tts_tasks(app, inputs, mq, voice_id):
 def work(app, inputs, mq, voice_id):
     try:
         asyncio.run(run_tts_tasks(app, inputs, mq, voice_id))
+    except Exception:
+        # A graph failure (provider outage, missing config, network error) must
+        # surface to the client instead of ending the stream silently. The full
+        # traceback stays server-side; the client only receives a safe message.
+        logger.exception("Chat graph failed for friend %s", inputs.get("friend_id"))
+        mq.put_nowait({"error": {"message": "AI 回复生成失败，请重试"}})
     finally:
         mq.put_nowait(None)
 
@@ -170,6 +187,7 @@ def _save_completed_message(
     output_bubbles: list,
     full_usage: dict,
     attachment_ids: list[int],
+    reply_provenance: dict | None = None,
 ) -> Message | None:
     """Save a completed response only if its Online Chat generation is current.
 
@@ -191,6 +209,7 @@ def _save_completed_message(
             )[:10000],
             output=full_output,
             output_bubbles=output_bubbles,
+            reply_provenance=reply_provenance or {},
             input_tokens=full_usage.get("input_tokens", 0),
             output_tokens=full_usage.get("output_tokens", 0),
             total_tokens=full_usage.get("total_tokens", 0),
@@ -222,10 +241,16 @@ def event_stream(
     full_output = ""
     output_bubbles = []
     full_usage = {}
+    had_error = False
+    reply_provenance = inputs.get("reply_provenance", {})
     while True:
         msg = mq.get()
         if not msg:
             break
+        if msg.get("error"):
+            had_error = True
+            yield f"data: {json.dumps({'error': msg['error']}, ensure_ascii=False)}\n\n"
+            continue
         if msg.get("bubbles") is not None:
             output_bubbles = [str(item) for item in msg["bubbles"] if str(item).strip()]
             full_output = "\n".join(output_bubbles)
@@ -234,6 +259,21 @@ def event_stream(
             yield f"data: {json.dumps({'audio': msg['audio']}, ensure_ascii=False)}\n\n"
         if msg.get("usage", None):
             full_usage = msg["usage"]
+        if msg.get("reply_provenance") is not None:
+            reply_provenance = msg["reply_provenance"]
+            yield f"data: {json.dumps({'reply_provenance': reply_provenance}, ensure_ascii=False)}\n\n"
+        if msg.get("context_diagnostics") is not None:
+            yield f"data: {json.dumps({'context_diagnostics': msg['context_diagnostics']}, ensure_ascii=False)}\n\n"
+
+    # A failed or content-less turn must not persist an empty AI message that
+    # later pollutes history and future context assembly.
+    if had_error or not full_output.strip():
+        if not had_error:
+            logger.warning(
+                "Chat graph returned no content for friend %s", friend.id,
+            )
+        yield "data: [DONE]\n\n"
+        return
 
     saved_message = _save_completed_message(
         friend_id=friend.id,
@@ -244,6 +284,7 @@ def event_stream(
         output_bubbles=output_bubbles,
         full_usage=full_usage,
         attachment_ids=attachment_ids,
+        reply_provenance=reply_provenance,
     )
     if saved_message is None:
         record_trace(
@@ -349,10 +390,20 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
     conversation_summary, message_raw = prepare_conversation_context(friend)
     messages = _build_conversation_messages(message, emotion_context, message_raw)
 
+    # Intent inheritance: the previous turn's classified intent decides short
+    # follow-ups ("还有呢", "哈哈") without an LLM classification call.
+    last_row = message_raw[-1] if message_raw else None
+    previous_intent = (
+        (last_row.reply_provenance or {}).get("supervisor_intent", "chat")
+        if last_row
+        else "chat"
+    )
+
     inputs = {
         "messages": messages,
         "intent": "",
         "delegate_to": "",
+        "previous_intent": previous_intent,
         "memory_context": "",
         "emotion_analysis": None,
         "emotion_context": emotion_context,
@@ -365,6 +416,22 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
         "character_name": friend.character.name,
         "chat_sender_name": friend.character.chat_sender_name or friend.character.name,
         "semantic_facts": [],
+        "core_memory_context": build_core_memory_context(friend.id),
+        "reply_provenance": {
+            "recent_online": [
+                {
+                    "message_id": row.id,
+                    "excerpt": f"用户：{row.user_message[:300]}\nAI：{(row.output or '')[:500]}",
+                }
+                for row in message_raw[-10:]
+            ],
+            "summary_through_message_id": friend.summary_through_message_id,
+            "has_working_summary": bool(conversation_summary),
+            "retrieved_raw": [],
+        },
+        "last_provider_input_tokens": Message.objects.filter(friend=friend).order_by("-id").values_list(
+            "input_tokens", flat=True
+        ).first() or 0,
         "friend_id": friend.id,
         "character_id": friend.character.id,
         "trace_metadata": {
@@ -389,6 +456,7 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
             "messages": serialize_messages(messages),
             "character_profile": friend.character.profile,
             "vision_attachment_count": len(vision_attachments),
+            "reply_provenance": inputs["reply_provenance"],
         },
         metadata=inputs["trace_metadata"],
     )

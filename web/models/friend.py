@@ -30,6 +30,9 @@ class Message(models.Model):
     input = models.TextField(max_length=10000)
     output = models.TextField()
     output_bubbles = models.JSONField(default=list, blank=True)
+    # Immutable-at-save explanation of the context that was supplied for this
+    # reply. It is provenance, not a claim that the model used only one source.
+    reply_provenance = models.JSONField(default=dict, blank=True)
     input_tokens = models.IntegerField(default=0)
     output_tokens = models.IntegerField(default=0)
     total_tokens = models.IntegerField(default=0)
