@@ -1,4 +1,4 @@
-# 千寻 · Memory-Driven AI Companion
+# 千寻（DeepEcho）· Memory-Driven AI Companion
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.136+-009688.svg)](https://fastapi.tiangolo.com/)
@@ -7,7 +7,7 @@
 [![LangGraph](https://img.shields.io/badge/AI-LangGraph-7C3AED.svg)](https://www.langchain.com/langgraph)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-一个以“长期记忆与人格延续”为核心的多模态 AI Companion。项目可导入真实微信聊天记录，将数万条原始对话处理成可检索证据、长期事实、关系演变和说话风格，并在后续文字、图片和语音聊天中按需召回，而不是把所有历史粗暴塞入系统提示词。
+**千寻（DeepEcho）**是一个以“长期记忆与人格延续”为核心的多模态 AI Companion。项目可导入真实微信聊天记录，将数万条原始对话处理成可检索证据、长期事实、关系演变和说话风格，并在后续文字、图片和语音聊天中按需召回，而不是把所有历史粗暴塞入系统提示词。
 
 > 核心目标：让 AI 不只是“知道一些资料”，而是能在有限上下文窗口内，基于正确证据、当前关系状态和角色表达习惯自然地继续一段长期对话。
 
