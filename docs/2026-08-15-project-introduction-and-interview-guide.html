@@ -1,0 +1,1201 @@
+<!doctype html>
+<!--
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  Guide HTML 模板（自包含，双击可打开）                              │
+  │                                                                    │
+  │  用法：                                                             │
+  │   1. 复制本文件为 <项目名>-guide.html                               │
+  │   2. 只改三处：<title>、header.site 里的标题/副标题、main 里的内容  │
+  │   3. <style> 与 <script> 原样保留，不要动                           │
+  │                                                                    │
+  │  内容填充约定（AI 生成时同样遵守）：                                │
+  │   - 每个板块一个 <section id="...">，id 对应导航链接                 │
+  │   - Q&A 用 <ol class="qa">，编号由 CSS 自动生成，只管写 <li>         │
+  │   - 表格包在 <div class="table-scroll"> 里，页面永不横向滚动        │
+  │   - 架构图用 <pre class="mermaid"> 写 mermaid 源码；                │
+  │     图内换行必须写成 &lt;br/&gt;（脚本会先还原文本再渲染）           │
+  │   - 主题三态自动适配系统深浅色；如需手动切换，给 <html>             │
+  │     设置 data-theme="light|dark" 即可（脚本监听变化自动重绘）        │
+  └────────────────────────────────────────────────────────────────────┘
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepEcho（千寻）项目全解与面试指南</title>
+<style>
+/* ══ 设计系统 ══════════════════════════════════════════════════════ */
+:root {
+  --bg: #F6F2E9;
+  --surface: #FFFFFF;
+  --ink: #1D2433;
+  --ink-soft: #5B6579;
+  --ink-faint: #8A92A5;
+  --accent: #9A6C1F;
+  --accent-soft: rgba(154, 108, 31, 0.10);
+  --line: #E3DCCB;
+  --danger: #B4543E;
+  --danger-soft: rgba(180, 84, 62, 0.09);
+  --code-bg: #151B28;
+  --code-ink: #DCE2EE;
+  --chip-bg: #ECE6D6;
+  --quote-line: #C9933C;
+  --serif-display: "Songti SC", "Noto Serif CJK SC", "STSong", serif;
+  --sans: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+/* 深色：跟随系统，但显式 data-theme="light" 优先 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121826;
+    --surface: #1A2233;
+    --ink: #E7EAF2;
+    --ink-soft: #A7B0C4;
+    --ink-faint: #6E7890;
+    --accent: #E0B468;
+    --accent-soft: rgba(224, 180, 104, 0.12);
+    --line: #2C364C;
+    --danger: #E08A6E;
+    --danger-soft: rgba(224, 138, 110, 0.10);
+    --code-bg: #0E1420;
+    --code-ink: #CBD4E6;
+    --chip-bg: #232D42;
+    --quote-line: #D9A84F;
+  }
+}
+/* 深色：显式 data-theme="dark" 也生效 */
+:root[data-theme="dark"] {
+  --bg: #121826;
+  --surface: #1A2233;
+  --ink: #E7EAF2;
+  --ink-soft: #A7B0C4;
+  --ink-faint: #6E7890;
+  --accent: #E0B468;
+  --accent-soft: rgba(224, 180, 104, 0.12);
+  --line: #2C364C;
+  --danger: #E08A6E;
+  --danger-soft: rgba(224, 138, 110, 0.10);
+  --code-bg: #0E1420;
+  --code-ink: #CBD4E6;
+  --chip-bg: #232D42;
+  --quote-line: #D9A84F;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.75;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 900px; margin: 0 auto; padding: 0 28px; }
+
+/* ── header ── */
+header.site {
+  padding: 56px 0 36px;
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.brand .dot { color: var(--accent); font-weight: 700; }
+h1 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-wrap: balance;
+}
+header.site .sub {
+  margin: 10px 0 0;
+  color: var(--ink-soft);
+  font-size: 15px;
+}
+.eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 10px;
+}
+.reading-tip {
+  margin: 22px 0 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.reading-tip span {
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: var(--chip-bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 14px;
+}
+
+/* ── sticky nav ── */
+nav.toc {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+nav.toc .wrap {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  scrollbar-width: none;
+}
+nav.toc::-webkit-scrollbar { display: none; }
+nav.toc a {
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--ink-soft);
+  text-decoration: none;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+nav.toc a:hover { color: var(--accent); border-color: var(--line); }
+
+/* ── sections ── */
+section { padding: 44px 0; border-bottom: 1px solid var(--line); }
+section:last-of-type { border-bottom: none; }
+h2 {
+  margin: 0 0 6px;
+  font-size: 23px;
+  font-weight: 700;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  text-wrap: balance;
+  scroll-margin-top: 64px;
+}
+h2 .no {
+  font-family: var(--serif-display);
+  font-weight: 600;
+  font-size: 17px;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+h3 {
+  margin: 34px 0 10px;
+  font-size: 17px;
+  font-weight: 700;
+  scroll-margin-top: 64px;
+}
+p { margin: 10px 0; }
+.lead { font-size: 16.5px; color: var(--ink); }
+.soft { color: var(--ink-soft); }
+a { color: var(--accent); }
+
+/* quote / 背诵卡 */
+blockquote {
+  margin: 18px 0;
+  padding: 16px 20px;
+  background: var(--accent-soft);
+  border-left: 3px solid var(--quote-line);
+  border-radius: 0 8px 8px 0;
+}
+blockquote p { margin: 8px 0; }
+blockquote .tag {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+}
+
+/* tables */
+.table-scroll { overflow-x: auto; margin: 16px 0; border-radius: 8px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14.5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+th, td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+th {
+  background: var(--chip-bg);
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+tr:last-child td { border-bottom: none; }
+td code { background: none; padding: 0; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* code */
+pre {
+  margin: 16px 0;
+  padding: 16px 18px;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: var(--chip-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  word-break: break-word;
+}
+pre code { background: none; padding: 0; }
+
+/* key point chips in C-sections */
+.point-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 16px 0; }
+.point-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 14.5px;
+}
+.point-card b { color: var(--accent); display: block; margin-bottom: 4px; font-size: 13.5px; letter-spacing: 0.04em; }
+
+/* Q&A（编号自动生成：只管写 <li>，Q1/Q2/... 由 CSS 计数器输出） */
+ol.qa { list-style: none; counter-reset: qa; margin: 0; padding: 0; }
+ol.qa > li {
+  counter-increment: qa;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin: 12px 0;
+}
+ol.qa > li > .q::before { counter-increment: qa; content: "Q" counter(qa); }
+ol.qa .q {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+ol.qa .q::before {
+  font-family: var(--serif-display);
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 8px;
+}
+ol.qa .a { color: var(--ink-soft); font-size: 14.5px; }
+ol.qa .a b { color: var(--ink); }
+
+/* weak points table */
+table.weak td:first-child { font-weight: 600; }
+.weak-attack { color: var(--danger); }
+
+/* mermaid 图容器 */
+pre.mermaid {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  text-align: center;
+  padding: 20px 12px;
+}
+
+/* flow text chain */
+.chain { font-size: 14px; color: var(--ink-soft); }
+.chain .arrow { color: var(--accent); }
+
+.footer-note {
+  padding: 26px 0 60px;
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+@media (max-width: 640px) {
+  body { font-size: 15px; }
+  h1 { font-size: 24px; }
+  h2 { font-size: 20px; }
+  .wrap { padding: 0 18px; }
+}
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <p class="eyebrow">DeepEcho · 千寻</p>
+    <div class="brand"><h1>DeepEcho（千寻）项目全解与面试指南</h1></div>
+    <p class="sub">一份文档完成两件事：① 让你彻底看懂这个项目怎么运转；② 让你能把项目讲给面试官听，并且经得起追问。</p>
+    <div class="reading-tip">
+      <span>① 第一遍：Part A + Part B（先建立全链路）</span>
+      <span>② 第二遍：Part G（补齐 SQLite / FTS5 / LanceDB 原理）</span>
+      <span>③ 面试前：Part C + Part D + Part H（按追问练习）</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <a href="#part-a">A 项目速览</a>
+    <a href="#part-b">B 如何运转</a>
+    <a href="#part-c">C 设计要点</a>
+    <a href="#part-d">D 面试 Q&amp;A</a>
+    <a href="#part-e">E 弱点防御</a>
+    <a href="#part-f">F 简历模板</a>
+    <a href="#part-g">G 原理白话课</a>
+    <a href="#part-h">H 面试作战</a>
+  </div>
+</nav>
+
+<main class="wrap">
+<blockquote>
+<p>一份文档完成两件事：<b>① 让你彻底看懂这个项目怎么运转</b>；<b>② 让你能把项目讲给面试官听，并且经得起追问。</b></p>
+<p>阅读建议：第一遍看 Part A + Part B 建立全链路；第二遍看 Part G 补齐 SQLite / FTS5 / LanceDB / Embedding 原理；面试前刷 Part C + Part D + Part H；被问到薄弱点时查 Part E。</p>
+</blockquote>
+
+<section id="part-a">
+<h2><span class="no">A</span>项目速览</h2>
+<h3>一句话定位</h3>
+<p><b>一个"长期记忆与人格延续"驱动的多模态 AI 陪伴应用：导入真实微信聊天记录，把几万条原始对话加工成可追溯的长期记忆，让 AI 在后续聊天中像"真的记得"一样自然回应，而不是每次把所有历史粗暴塞进提示词。</b></p>
+<h3>30 秒电梯演讲（背下来）</h3>
+<blockquote>
+<span class="tag">30 秒电梯演讲（背下来）</span>
+<p>我做了个 AI 陪伴项目叫千寻（DeepEcho）。市面上大多数聊天项目就是"角色 Prompt + 最近几轮消息"，聊多了就失忆。我的项目核心是解决<b>长期记忆</b>问题：支持导入上万条真实微信聊天记录，用一套可断点恢复的预处理流水线，把原文提炼成结构化长期记忆（身份、偏好、经历、关系演变），存进 SQLite 作为权威源，同时建 FTS5 全文索引和向量索引。聊天时，一个多 Agent 系统先判断用户意图——是闲聊、回忆、还是有情绪——只有回忆类问题才进记忆检索链路，检索结果经过重排压缩后按 token 预算拼进上下文。所有记忆都带原文证据，可追溯、可重建、可降级，LLM 挂了也不会让整轮对话失败。</p>
+</blockquote>
+<h3>1 分钟版（加"为什么值得做"）</h3>
+<blockquote>
+<span class="tag">1 分钟版（加"为什么值得做"）</span>
+<p>我做了个 AI 陪伴项目叫千寻（DeepEcho）。它解决的核心问题是：<b>AI 陪伴的长期记忆</b>。</p>
+<p>普通聊天项目聊完就忘，但真实的亲密关系有大量"记住"的需求：她会记得我不吃香菜、记得我们的纪念日、记得我们吵过架又和好。我的项目就是把这个"记住"做成工程。</p>
+<p>架构上分三层：<b>数据层</b>是 SQLite（原文权威存储）+ FTS5（中文全文索引）+ LanceDB（向量索引）；<b>加工层</b>是把微信聊天记录切块、并行用 LLM 分析、断点续跑、归约出长期记忆的预处理流水线；<b>推理层</b>是一个 LangGraph 多 Agent 系统——Supervisor 用规则+LLM 混合路由意图，Memory Agent 负责检索，Emotion Agent 识别情绪，Conversation Agent 最终按角色风格生成多条气泡回复，通过 SSE 流式返回，还带 TTS 语音。</p>
+<p>我用 2.3 万条真实聊天消息做过全量验证，期间还解决了 LLM 输出不可靠、并发折叠竞态、向量索引一致性、上下文 token 预算等一系列工程问题。这是我从零设计的一个完整全栈 AI 项目。</p>
+</blockquote>
+<h3>5 分钟版（按 Part C 的八个要点展开讲）</h3>
+<ol>
+<li><b>四层记忆体系</b>（为什么分层、谁是权威、派生层怎么重建）</li>
+<li><b>统一历史检索</b>（中文 FTS5 分词方案、向量混合检索、去重重排压缩）</li>
+<li><b>上下文工程</b>（软硬预算、CJK 估算、滚动折叠、意图驱动检索）</li>
+<li><b>混合意图路由 + 多 Agent 编排</b>（规则优先、LLM 兜底、意图继承省调用）</li>
+<li><b>可恢复预处理 Pipeline</b>（聊天日、Chunk、双指纹断点、partial 语义）</li>
+<li><b>Style Profile</b>（从角色本人消息学习说话风格）</li>
+<li><b>多模态与语音</b>（图片走 GLM、ASR/TTS、前端气泡渲染）</li>
+<li><b>并发安全、隐私与降级</b>（代际号、行锁、CAS 抢占、私有数据隔离）</li>
+</ol>
+<p>每一点的完整讲法见 Part C。</p>
+</section>
+
+<section id="part-b">
+<h2><span class="no">B</span>项目如何运转</h2>
+<h3>系统架构图</h3>
+<pre class="mermaid">
+flowchart LR
+    UI["Vue 3 Web / Mobile UI"] --&gt; API["FastAPI API (SSE/WS)"]
+    API --&gt; SUP["LangGraph Supervisor"]
+    SUP --&gt;|普通闲聊 / 时间| CONV["Conversation Agent"]
+    SUP --&gt;|回忆 / 稳定事实| MEM["Memory Agent"]
+    SUP --&gt;|强情绪 / 歧义| EMO["Emotion Agent"]
+    MEM --&gt; CONV
+    EMO --&gt; CONV
+    CONV --&gt;|文字| LLM["LLM (默认 DeepSeek V4 Pro)"]
+    CONV --&gt;|图片| GLM["GLM Vision"]
+    API --&gt; VOICE["DashScope ASR / TTS"]
+    MEM --&gt; SEARCH["统一历史检索&lt;br/&gt;FTS5 + 词法 + LanceDB 向量"]
+    SEARCH --&gt; IMPORTED["Imported Chat&lt;br/&gt;(微信导入原文)"]
+    SEARCH --&gt; ONLINE["Online Chat&lt;br/&gt;(用户与 AI 对话)"]
+    MEM --&gt; SEM["Semantic Memory&lt;br/&gt;(结构化长期事实)"]
+
+    DB[(SQLite)] -.权威源.-&gt; IMPORTED
+    DB -.权威源.-&gt; ONLINE
+    DB -.权威源.-&gt; SEM
+    LANCEDB[(LanceDB)] -.向量投影可重建.-&gt; SEARCH
+</pre>
+<p><b>一句话记架构</b>：FastAPI 提供 API 和流式接口，Django 只做 ORM/Admin，LangGraph 编排四个 Agent，SQLite 是唯一权威源，FTS5 和 LanceDB 都是可重建的检索投影。</p>
+<h3>一次对话的完整链路（面试必讲）</h3>
+<pre><code>用户在聊天框发消息（文字或图片）
+  │
+  ▼
+POST /api/friend/message/chat/（JWT Bearer 鉴权 → 校验 friend 归属 → 附件校验）
+  │
+  ▼
+组装上下文：角色设定 + Style Profile + 最近原文 + 滚动摘要 + 上一轮意图
+  │
+  ▼
+LangGraph 执行（在 TTS WebSocket 会话内异步运行）：
+  1. Supervisor 路由：关键词规则 → 必要时 LLM 分类（20s 超时）
+     - 闲聊/时间 → Conversation Agent（普通闲聊不查记忆，省 token）
+     - 回忆/记忆 → Memory Agent（语义事实 + 原文证据检索 + 重排压缩）
+     - 强情绪 → Emotion Agent（输出情绪强度与建议语气，再回 Conversation）
+  2. Conversation Agent：按 token 预算拼装最终 System Prompt
+     - 有图片 → 走 GLM 视觉模型；否则走文本 LLM（DeepSeek）
+     - 输出 {"bubbles": [...]} 结构化多气泡 JSON
+  3. 气泡解析与兜底拆分（模型乱用换行 → 按规则拆成多个气泡）
+  │
+  ▼
+SSE 流式返回：bubbles 整组 → audio 逐帧（TTS）→ reply_provenance → [DONE]
+  │
+  ▼
+落库（事务 + 行锁 + 代际校验，失败/空回复不落库）
+  → 增量建向量索引 → 入队当日 Reflection 任务（后台线程）</code></pre>
+<h3>一次微信导入的完整链路（预处理流水线）</h3>
+<pre><code>上传 TXT（UTF-8，可带/不带方括号时间戳，自动噪音过滤）
+  │
+  ▼
+解析入库：ChatMessage 全量重建（msg_index 0..N 顺序编号）
+  → 建 FTS5（DROP 重建 + jieba tokens 列）→ 建 LanceDB 表
+  │
+  ▼
+后台线程启动预处理（每个角色最多一个并发 worker）：
+  Chunk 切分（0 次 LLM）：按"聊天日"分界（凌晨最安静小时+1）
+    → 日内超限再切（≤120 条 / ≤10000 字符 / 重叠 6 条）
+  Map（5 并发 LLM）：每个 Chunk 分析摘要/话题/关键事件/双方事实（带证据编号）
+    → 结果持久化到 PreprocessingCheckpoint（双指纹）
+  Reduce：Relationship Reduce（分层归约：日→月→年→全局）+ Style Reduce
+  Write（事务）：删旧投影 → 写 TimeChunk/TopicTag/SemanticMemory/Relationship Overview
+    → 重建向量索引 → 覆盖写入 style_profile
+  │
+  ▼
+进度反馈（轮询）：map 阶段封顶 95%，失败 → partial 状态，可"从断点继续"</code></pre>
+<h3>项目怎么启动运行</h3>
+<pre><code># 后端
+uv sync
+cp .env.example .env          # 配 LLM_API_KEY、VISION_LLM_API_KEY、DASHSCOPE_API_KEY
+uv run python manage.py migrate
+uv run uvicorn main:app --reload --port 8000    # API + Admin(/admin) + SPA
+
+# 前端
+cd frontend &amp;&amp; npm install &amp;&amp; npm run dev       # http://127.0.0.1:5173
+npm run build                                     # 产物进 static/frontend/，FastAPI 托管
+
+# 常用运维
+uv run pytest                                    # 测试
+uv run python manage.py resume_import_preprocessing --character-id 1   # 断点续跑
+uv run python manage.py rebuild_style_profile --character-id 1          # 重建风格
+uv run python manage.py rebuild_fts5_index --character-id 1             # 重建 FTS5 全文索引
+uv run python manage.py run_reflection_jobs --watch                    # 常驻反思 worker</code></pre>
+</section>
+
+<section id="part-c">
+<h2><span class="no">C</span>核心设计要点详解</h2>
+<blockquote>
+<p>每个要点按同一结构讲：<b>是什么 → 为什么 → 怎么实现 → 面试官可能追问什么</b>。</p>
+</blockquote>
+<h3>C1. 四层记忆体系：权威源与投影分离</h3>
+<p><b>是什么</b>：记忆分四层——微信导入原文（Imported Chat）、用户与 AI 的在线聊天（Online Chat）、结构化长期事实（Semantic Memory）、滚动摘要与阶段胶囊（Conversation Collapse / Working Summary）。</p>
+<p><b>为什么</b>：把"原始发生了什么"和"模型总结出了什么"分开。总结可以错、可以过期、可以重建，但原文永远在。这样记忆出错了可以溯源修正，而不是信任一坨不可解释的摘要。</p>
+<p><b>怎么实现</b>：</p>
+<div class="table-scroll"><table>
+<thead><tr><th>层</th><th>权威存储</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td>Imported Chat</td><td><code>ChatMessage</code> / SQLite</td><td>微信原文，FTS5 + 向量检索 + 上下文窗口扩展</td></tr>
+<tr><td>Online Chat</td><td><code>Message</code> / SQLite</td><td>用户与 AI 完整对话，Reflection 后不删除原文</td></tr>
+<tr><td>Semantic Memory</td><td><code>SemanticMemory</code> / SQLite</td><td>结构化长期事实：subject（用户/女友/关系）、category、置信度、时间有效区间、可变性、证据引用</td></tr>
+<tr><td>派生层</td><td>摘要/胶囊/向量索引</td><td>全部可重建；折叠只生成投影视图，绝不删原文</td></tr>
+</tbody></table></div>
+<p><b>可靠性细节</b>：</p>
+<ul>
+<li>记忆事实带 <code>memory_state</code>（current/historical）、<code>valid_from/valid_to</code>、<code>trajectory_key</code>（演变时间线：喜欢辣 → 不能吃 → 又能吃辣 是同一条轨迹而非三行孤立记录）、<code>is_locked/is_mutable</code>（核心事实不可被自动改写）。</li>
+<li><code>MemoryEvidence</code> 关联原文：导入证据存 <code>msg_index</code>，在线证据存 <code>Message.id</code>，用户手动存 <code>user_assertion</code>。每条记忆可展开查看原始上下文（±3 条消息窗口 + 可见性校验）。</li>
+<li>重建流程：SQLite 是权威；向量索引用"临时表 + 行数校验 + overwrite 替换"重建，失败保留旧索引（投影坏了不影响数据）。</li>
+</ul>
+<p><b>追问应对</b>：</p>
+<ul>
+<li>"为什么不用一张表装所有东西？" → 两类聊天生命周期不同（导入是批量的、在线是实时的），但上层用统一的 ConversationHistorySearch 接口屏蔽差异，避免强行合并表带来的耦合。</li>
+<li>"为什么不用 JSON 直接存向量？" → SQLite 不支持高效的相似度检索；LanceDB 本地化、无服务、可重建，对单机个人项目比 pgvector 简单。</li>
+</ul>
+<h3>C2. 中文全文检索：FTS5 的分词方案</h3>
+<p><b>是什么</b>：导入聊天用 SQLite FTS5 做关键词检索。<b>中文检索的第一个坑：FTS5 的 unicode61 tokenizer 不切中文——整段中文会被当成一个 token，<code>MATCH "生日"</code> 永远查不到</b>。</p>
+<p><b>怎么实现</b>：建表时多存一列 <code>tokens</code>，导入时经 <code>_sync_fts5_table</code> <b>先 DROP 旧表再全量重建</b>（存量表可能是无 tokens 列的结构，IF NOT EXISTS 不会升级），用 jieba 分词（空格连接）写入 tokens 列，500 条一批批量插入；查询侧同样 jieba 切词后拼成带引号的短语 <code>MATCH</code>。中文词没进 tokens 列时，用 <code>content LIKE</code> 兜底补 3 个词（标记 <code>fts5_like</code>，分数打 0.8 折）。另有 <code>rebuild_fts5_index</code> 管理命令可随时全量重建（同样走 DROP + 重建流程）。</p>
+<p><b>为什么值得讲</b>：这是"预分词 + 查询侧对齐"的经典中文全文检索方案，面试官会认可这是真踩过坑的工程经验。</p>
+<p><b>追问应对</b>：</p>
+<ul>
+<li>"为什么不用 Elasticsearch？" → 单机个人数据规模（几万条），SQLite FTS5 零部署、零维护、查询亚毫秒；ES 是大规模多租户场景的答案。项目架构上 Adapter 已解耦，未来可换。</li>
+</ul>
+<h3>C3. 统一历史检索：混合检索 + 去重 + 重排 + 压缩</h3>
+<p><b>是什么</b>：<code>ConversationHistorySearch</code> 在导入聊天和在线聊天之上提供统一检索接口，把"关键词、向量、词法模糊"三类信号混合后送进重排器。</p>
+<p><b>检索流程</b>：</p>
+<pre><code>用户问题 → Query Rewrite（最多 3 个检索表达，含 HyDE 假设文档）
+  → Imported Chat：FTS5 + LanceDB 向量 → 命中消息 ±5 条扩展原文窗口
+  → Online Chat：jieba 分词 + SQLite icontains + 词法相似度(二元组 Jaccard) + 向量
+  → 跨来源去重（key = 来源 + 消息引用 + 内容前 100 字符，保分数高者）
+  → LLM Reranker 重排（候选 ≤8 时跳过 LLM 直接按原分排序）
+  → Context Compressor 压缩（&gt;3000 字才压缩，失败硬截断）
+  → 有界 memory_context</code></pre>
+<p><b>关键细节</b>：</p>
+<ul>
+<li>每个 LLM 环节都有<b>非 LLM 兜底</b>：rerank 失败 → 原分排序；压缩失败 → 截断；向量库不存在 → 纯词法；向量表查询失败 → 静默降级。</li>
+<li>分数故意<b>不跨来源归一化</b>（词法 0~1、FTS5 固定分、向量 0~1 不具可比性）：排序靠各来源相对高低，去重靠内容 key。这是刻意的简化——简单、稳定，且统一归一化在来源差异巨大的场景下收益有限。</li>
+</ul>
+<h3>C4. 上下文工程：预算、估算、折叠、意图驱动</h3>
+<p><b>是什么</b>：每次模型请求的上下文不是"全量历史"，而是<b>按需组装的投影</b>。三个机制：</p>
+<ol>
+<li><b>Token 预算</b>（<code>context_budget.py</code>）：SOFT 32K / HARD 40K 两级；内置 CJK 估算器 <code>ceil(0.9×汉字数 + 非汉字/3.2)</code>（中文 token 密度高于英文，刻意保守）；上一轮 provider 真实 usage 作为校准锚点；按意图权重分配各记忆区块预算，逐区块截断，越界留 marker 标注。</li>
+<li><b>滚动折叠</b>：未摘要的 Online Chat 超过 9000 token 时触发压缩——按 8000 字符分批，每批 LLM 生成"工作摘要 + 阶段胶囊"，推进 <code>summary_through_message_id</code> 检查点；保留最近 10 轮原文（≤6000 token）。折叠失败降级为有界原文投影，<b>绝不丢消息</b>。</li>
+<li><b>意图驱动</b>：普通闲聊和时间问题跳过 Memory Agent（省延迟、省 token、防无关记忆污染）；只有回忆/记忆类问题才进检索链路。</li>
+</ol>
+<p><b>为什么</b>：LLM 上下文窗口有限且贵。真正的工程问题不是"塞得下多少"，而是"该塞什么、不该塞什么"——记忆不是越多越好，错误/过期的记忆会直接污染生成。</p>
+<p><b>追问应对</b>：</p>
+<ul>
+<li>"估算器不准怎么办？" → 估算只用于决策（截断阈值），真实 usage 随 context_diagnostics 下发展示；soft/hard 双阈值给估算误差留了缓冲。</li>
+<li>"为什么保留最近原文而不是全摘要？" → 原文保真度最高，摘要再准也是损失信息后的产物；两者结合：近的用原文，远的用胶囊定位。</li>
+</ul>
+<h3>C5. 混合意图路由 + 多 Agent 编排（LangGraph）</h3>
+<p><b>是什么</b>：一张 LangGraph 图，四个节点：<code>supervisor → memory / emotion / conversation</code>。</p>
+<p><b>图结构</b>：</p>
+<ul>
+<li><code>supervisor</code> 条件路由：emotional → emotion；recall/memory 或轻量回忆信号 → memory；否则 conversation（<b>time 意图也直接走 conversation</b>，不查记忆）。</li>
+<li><code>memory</code> 之后：若 emotion 还没跑，再扫强情绪信号命中则去 emotion。</li>
+<li><code>emotion</code> 之后：若 memory 还没跑且意图是回忆 → 去 memory。</li>
+</ul>
+<p><b>Supervisor 路由规则（优先级从高到低）</b>：</p>
+<ol>
+<li>关键词命中：20 个情绪词 → emotional；6 个时间词 → time；10 个回忆词 → recall；9 个记忆词 → memory</li>
+<li>前端 emoji 语义非空 <b>或</b> 命中 12 个歧义词（"算了/没事/你忙吧"）→ LLM 分类（20s 超时，失败回退 chat）</li>
+<li>短消息（≤24 字符）且有上一轮意图 → <b>意图继承</b>（省一次 LLM 调用）；含指代词（去/翻/找/还有呢）→ LLM；否则 chat</li>
+<li>兜底 chat</li>
+</ol>
+<p><b>意图继承</b>：上一轮 <code>supervisor_intent</code> 持久化在 <code>Message.reply_provenance</code> 里，短消息直接继承——"还有呢？""哈哈"这类消息自己不带意图，省掉每轮一次 LLM 分类调用。</p>
+<p><b>为什么规则优先</b>：明确问题（"我喜欢吃什么？"）用关键词零额外延迟路由；只有歧义（"算了"）才花一次 LLM 调用。可解释、成本低、召回准确，且 LLM 挂了也不影响整轮。</p>
+<p><b>追问应对</b>：</p>
+<ul>
+<li>"为什么用 LangGraph 不用自写状态机？" → 条件边天然表达路由逻辑、节点状态可调试、支持持久化，省去自造轮子；图结构本身也便于演进（加节点/加边）。</li>
+<li>"多 Agent 会不会反而慢？" → 快路径（闲聊）只走 supervisor→conversation 两个节点；记忆链路只在需要时触发。</li>
+</ul>
+<h3>C6. 可恢复的预处理 Pipeline</h3>
+<p><b>是什么</b>：把数万条微信消息加工成记忆的批量流水线，核心诉求是<b>大规模 + 可恢复</b>（余额耗尽、进程被杀都能续跑）。</p>
+<p><b>设计</b>：</p>
+<ul>
+<li><b>聊天日分界是数据驱动的</b>：统计凌晨 0-6 点每小时消息数，取最安静小时 +1 作为日界（熬夜党 02:34 还在聊 → 03:00 才算新一天），默认 5 点。</li>
+<li><b>Chunk 切分</b>（0 次 LLM）：每天超限再切，≤120 条 / ≤10000 字符，overlap 6 条保连续性。</li>
+<li><b>Map 并行</b>：5 个并发 LLM，每 Chunk 一次 prompt 同时分析双方——摘要、话题、关键事件、双方事实（<b>每条事实必须带主语和证据编号</b>）。</li>
+<li><b>双指纹断点</b>：<code>source_fingerprint</code>（全量消息的 sha256）+ <code>chunk_fingerprint</code>（chunk 结构 sha256）。原文一变 → 指纹变 → 旧断点整组失效，不会混入旧分析；续跑只重跑失败/缺失 chunk。</li>
+<li><b>LLM 防御</b>：剥 markdown 围栏、截取 JSON 区间、证据编号必须真实存在于该 chunk（防模型编造）、长度截断；单次事件禁止写成"总是/经常"；相对时间必须锚定绝对日期。</li>
+<li><b>记忆分类与时态分流</b>：identity 收窄为恒定身份（姓名/生日/出生地/家庭成员等不会变的信息）；preference 含偏好与"当前状态身份"（现在/目前的学校/职业/城市/学历/证书/经济状况等，可随时间改变）；experience 含经历与"已结束的过去状态"（曾就读/曾任职等，追加即可、不可变）。同一维度变化时当前状态用 replaces 转历史保留轨迹，已结束状态只追加不替换。</li>
+<li><b>情绪防污染</b>：情绪化自嘲/抱怨/自我贬低（"一穷二白""啥证书没有"）是临时情绪表达，不得提炼为长期事实；只提取其中具体的客观信息。</li>
+<li><b>partial 语义</b>：补救重试（最多 5 个失败 chunk 带相邻上下文重试一次）后仍有失败 → status=partial，进度条 map 阶段封顶 95%，可一键续跑。</li>
+<li><b>Reduce</b>：Relationship 分层归约（日 → 月 → 年 → 全局，阈值内纯代码聚合省 LLM）；Style Reduce 从角色本人消息学习说话风格。</li>
+<li><b>事务写入</b>：删旧投影 → 写新记忆（只删 source="import" 的，保留用户手动和 Reflection 的）→ 重建向量 → 覆盖 style_profile。</li>
+</ul>
+<p><b>为什么值得讲</b>：这是"把不可靠的 LLM 组织成可靠的生产流水线"的完整范例——断点续跑、指纹失效、防御性解析、优雅降级，每一点都能展开讲。</p>
+<h3>C7. Style Profile：学习说话风格而不是堆设定</h3>
+<p><b>是什么</b>：从角色本人（target_name）的全部消息统计 + LLM 提炼，生成 ≤2000 字的风格指南：称呼、语气、emoji 习惯、回复长度分布、连发气泡节奏、应避免的表达。</p>
+<p><b>怎么实现</b>：统计全量（样例均匀抽样 ≤120 条防只学到开头/结尾）；候选事实来自导入分析的 girlfriend_fragments 或语义记忆；LLM 输出后<b>强制附加统计约束行</b>（"中位数 X 字，90% 不超过 Y 字；默认 2-3 个气泡"）——即使 LLM 失败也有规则兜底。 每次重新导入<b>全量重算覆盖</b>（保证稳定签名，但会丢旧微调——设计取舍）。</p>
+<p><b>为什么</b>：人格稳定性的关键是"角色怎么说话"，而不是"角色知道什么"。风格是统计+学习出来的，不随在线聊天漂移。</p>
+<h3>C8. 并发安全、隐私与降级</h3>
+<p><b>三处并发防线（代际号）</b>：</p>
+<ul>
+<li>回复落库与清空历史：<code>Friend.online_history_generation</code> 代际号 + <code>select_for_update</code> 行锁。请求发起时捕获代次，落库时校验——先落库再被清，或先 +1 再丢弃，不存在中间态。</li>
+<li>滚动折叠：per-Friend 进程锁 + 锁内重读检查点，慢的那个发现没活干直接返回（单进程假设，多 worker 需换 DB 级锁）。</li>
+<li>Reflection 写入：事务 + 行锁 + 代次校验；embedding 是提交后的带外操作，靠"事后二次校验 + 定向删除"收敛竞态。</li>
+<li>Reflection 任务抢占：<b>条件 UPDATE 的 CAS 式抢占</b>（无 SELECT FOR UPDATE），<code>locked_at</code> 30 分钟超时回收崩溃任务，attempts ≥3 永久放弃。</li>
+</ul>
+<p><b>隐私</b>：</p>
+<ul>
+<li>JWT 鉴权：access 2h + refresh 7d（httponly cookie，旋转）。</li>
+<li>导入记忆 <code>private/public</code> 可见性：默认隔离，非作者用户检索不到私有聊天；public 时把作者记忆物化拷贝给所有用户。</li>
+<li>图片：base64 只进最终视觉模型调用（Supervisor/Memory/Emotion 只见文本）；<code>chat_images</code> 路径一律 404；附件走私有鉴权 URL；LangSmith 对视觉调用关闭采集。</li>
+<li>聊天脱敏工具：识别密码/身份证号，不修改原文件。</li>
+</ul>
+<p><b>失败降级契约（贯穿全程）</b>：Supervisor 分类失败 → chat；Emotion 失败 → neutral；Rerank 失败 → 原分；压缩失败 → 截断；折叠失败 → 有界原文投影；图异常 → SSE error 事件透出（"AI 回复生成失败，请重试"），<b>空回复不落库</b>。每个 LLM 调用点都有非 LLM 兜底——"检索/分析失败不炸整轮"是贯穿性设计。</p>
+</section>
+
+<section id="part-d">
+<h2><span class="no">D</span>面试官 Q&amp;A</h2>
+<h3>一、项目动机与定位</h3>
+<ol class="qa" style="counter-reset: qa 0">
+<li><p class="q">为什么做这个项目？</p>
+<p class="a">市面 AI 陪伴普遍"聊完就忘"，真实关系却大量依赖"记得"。我系统性地解决了 AI 的长期记忆问题：可信（证据可追溯）、可控（上下文预算）、可恢复（断点续跑）。同时这是一个我独立设计的完整全栈项目，覆盖了 LLM 工程里最难的几个问题。</p>
+</li>
+<li><p class="q">这个项目和角色扮演产品（Character.AI 之类）的本质区别？</p>
+<p class="a">核心不是角色设定的丰富度，而是<b>记忆系统</b>：导入真实对话 → 结构化长期事实 → 意图驱动的按需召回 → 证据可追溯。C.AI 是"上下文窗口里的角色"，这个项目是"有长期记忆的人"。</p>
+</li>
+</ol>
+<h3>二、架构与设计决策</h3>
+<ol class="qa" style="counter-reset: qa 2">
+<li><p class="q">整体架构？画一下。</p>
+<p class="a">FastAPI（API/SSE）→ LangGraph 多 Agent（Supervisor/Memory/Emotion/Conversation）→ 双存储（SQLite 权威 + LanceDB/FTS5 投影）→ 前端 Vue3。Django 只做 ORM/Admin。见 Part B 架构图。</p>
+</li>
+<li><p class="q">为什么 FastAPI 和 Django 混用？</p>
+<p class="a">FastAPI 擅长异步流式（SSE/WebSocket）和轻量 API；Django 提供成熟的 ORM、迁移、Admin。Django Admin 挂 WSGIMiddleware 在 /admin 下，业务 API 全在 FastAPI，共享同一个 SQLite。</p>
+</li>
+<li><p class="q">为什么 SQLite + LanceDB？不选 pgvector/ES/Milvus？</p>
+<p class="a">规模决定架构：单机个人数据几万条消息，SQLite 零部署、事务强、备份就是拷文件；LanceDB 本地向量库零服务、可重建。上层统一检索 Adapter 已解耦，未来多用户可迁移 PostgreSQL + pgvector。ES 是大规模多租户的答案，对当前场景是过度设计。</p>
+</li>
+<li><p class="q">为什么用 LangGraph？</p>
+<p class="a">条件边原生表达意图路由，节点/状态可调试，比自写状态机省维护。图是声明式的，加 Agent 加边即可演进。</p>
+</li>
+<li><p class="q">SSE 而不是 WebSocket 做聊天流式？</p>
+<p class="a">文本流单向从服务端到客户端，SSE 足够且天然支持重连；WebSocket 留给真正需要双工的场景（TTS 其实内部用了 WebSocket——见 Q21）。</p>
+</li>
+</ol>
+<h3>三、记忆与检索</h3>
+<ol class="qa" style="counter-reset: qa 7">
+<li><p class="q">记忆系统怎么设计？为什么分层？</p>
+<p class="a">见 C1：原文与结论分离，权威源 + 可重建投影。讲"原始发生过什么"和"模型总结出什么"的区别，讲 evidence 闭环。</p>
+</li>
+<li><p class="q">中文全文检索怎么做？FTS5 的坑？</p>
+<p class="a">见 C2：unicode61 不切中文 → jieba 预分词 tokens 列 + 查询侧对齐 → LIKE 兜底。这是必答亮点，一定主动讲。</p>
+</li>
+<li><p class="q">向量检索和关键词检索怎么结合？结果怎么排序去重？</p>
+<p class="a">HybridRetriever：FTS5 + 原 query 向量 + HyDE + 改写 query 并行召回；Jaccard 去重；LLM Reranker 只改分不删文档；跨来源按内容 key 去重。诚实讲：分数不归一化，靠相对排序——见 Q11。</p>
+</li>
+<li><p class="q">为什么分数不归一化？（攻击点）</p>
+<p class="a">这是<b>刻意取舍</b>：来源差异巨大（词法 0~1、FTS5 固定分、向量 relevance、锚点证据 1.15），强行统一归一化要么引入脆弱参数要么过度工程；跨轮稳定性 &gt; 理论完美。去重靠内容 key 而非分数，排序靠各来源相对高低。有说法就不虚。</p>
+</li>
+<li><p class="q">检索到的记忆过期了怎么办？（时间锚定）</p>
+<p class="a">写入端：prompt 强制把相对时间锚定绝对日期；读取端：对存量未锚定事实自动降权 + 标注"（时间不确定，可能已过期）"，不删除只标注，让模型知道时效不可靠。另有 TimeChunk 按"聊天日"分片，回忆"上周"只查对应时间片。</p>
+</li>
+<li><p class="q">Semantic Memory 怎么避免"重复事实"和"新旧冲突"？</p>
+<p class="a">trajectory_key 把可变化事实串成时间线；<code>resolve_conflict</code> 把旧事实标记 historical + replaced_by；默认可变性规则（身份/经历不可变、偏好可变）；is_locked 用户钉死。</p>
+</li>
+<li><p class="q">记忆怎么分类？为什么 identity 要收窄？</p>
+<p class="a">四分类 identity / preference / experience / relationship。identity 只收恒定身份（姓名/生日/出生地/家庭成员），因为"身份"定义过宽时，年龄、职业一变化就会污染身份记忆。preference 除了偏好还收"当前状态身份"（现在/目前的学校/职业/城市/学历/证书/经济状况），这类信息会随时间改变，走轨迹；experience 收具体经历 + "已结束的过去状态"（曾就读/曾任职的学校/职业/城市），追加即可、不可变。<b>时态分流</b>：当前状态同维度变化时用 replaces 把旧状态转历史保留轨迹；已结束状态不 replaces、只追加——一个用户从 A 大学毕业后在 B 大学读研，会形成一条可回看的时间线，而不是互相覆盖的两行事实。</p>
+</li>
+<li><p class="q">怎么防止把情绪当事实？</p>
+<p class="a">prompt 规则明确：情绪化自嘲/抱怨/自我贬低（"一穷二白""啥证书没有"）是临时情绪表达，不得提炼为长期事实，只提取其中具体的客观信息（如"要交材料""问成绩单在哪"）。短期情绪必须带时间限定（"当天/这段时间" + 绝对日期），单次事件禁止写成"总是/经常"。这是导入流水线和 Reflection 两端的共同纪律。</p>
+</li>
+</ol>
+<h3>四、上下文工程</h3>
+<ol class="qa" style="counter-reset: qa 15">
+<li><p class="q">上下文窗口有限，怎么塞下"全部记忆"？</p>
+<p class="a">不塞全部。三件事：① token 预算分级截断（SOFT/HARD 32K/40K + CJK 估算器 + 意图权重）；② 滚动折叠（9000 token 触发，保留最近原文 + 旧摘要胶囊）；③ 意图驱动检索（闲聊不查记忆）。核心观点：<b>上下文工程是"该塞什么"的问题，不是"塞得下多少"的问题</b>。</p>
+</li>
+<li><p class="q">滚动折叠怎么实现？并发时怎么办？</p>
+<p class="a">分批（8000 字符/批）逐批生成摘要并推进检查点；per-Friend 进程锁 + 锁内重读检查点防并发双折叠；失败降级有界原文投影，绝不丢消息。诚实补充：进程锁只保证单 worker 正确（见 Part E）。</p>
+</li>
+</ol>
+<h3>五、多 Agent 与意图</h3>
+<ol class="qa" style="counter-reset: qa 17">
+<li><p class="q">四个 Agent 各自干什么？为什么拆？</p>
+<p class="a">见 C5 表格。拆分理由：意图判断、记忆检索、情绪识别、生成各干各的，可独立替换（比如换检索策略不改生成）、独立预算（memory 区块按意图加权）、失败可独立兜底。</p>
+</li>
+<li><p class="q">意图路由为什么规则优先而不是全 LLM？</p>
+<p class="a">明确问题关键词零延迟零成本；LLM 只处理歧义；短消息意图继承再省一次调用。可解释 + 成本 + 失败可回退。</p>
+</li>
+<li><p class="q">意图继承怎么防"继承错了"？</p>
+<p class="a">只继承三类记忆/情绪意图，chat 不继承；歧义词和 emoji 语义优先级高于继承；带指代线索的短消息重新走 LLM。</p>
+</li>
+</ol>
+<h3>六、可靠性、并发与数据一致性</h3>
+<ol class="qa" style="counter-reset: qa 20">
+<li><p class="q">LLM 输出不可靠怎么办？</p>
+<p class="a">五道防线：JSON 解析兜底（剥围栏/截区间/逐元素校验）；气泡拆分规则（行数、markdown 检测、长度上限）；证据编号必须真实存在；失败降级链（每个 LLM 环节都有非 LLM 兜底）；空回复不落库。</p>
+</li>
+<li><p class="q">SQLite 和向量库数据不一致怎么办？</p>
+<p class="a">设计上 SQLite 是权威、向量是投影；重建流程有行数校验 + 原子替换。Semantic/Online 向量命中会回查 DB 做 is_active/归属校验，Imported 向量按当前 import version 解析，精确消息证据由 FTS5 rowid/TimeChunk 补齐；所以过期投影不能复活已删事实。embedding 提交后的竞态靠"二次校验 + 定向删除"收敛。</p>
+</li>
+<li><p class="q">TTS 语音和对话怎么同步的？</p>
+<p class="a">聊天请求先与 DashScope 建立 TTS WebSocket（duplex），在 WS 会话内执行整张 LangGraph：每个气泡发一个 continue-task，音频逐帧 SSE 下发；前端 MediaSource + SourceBuffer 串行写入（updateend 事件队列），音频初始化必须挂在用户手势里（浏览器自动播放限制）。</p>
+</li>
+<li><p class="q">图片消息怎么处理？</p>
+<p class="a">上传：格式/大小/像素校验、EXIF 转正、统一转 WebP、sha256 去重。生成：图片 base64 只进最终视觉模型调用（GLM），中间 Agent 只见文本，防止图片污染记忆/检索链路。隐私：私有鉴权 URL、聊天图片路径 404、关闭视觉调用的追踪。</p>
+</li>
+</ol>
+<h3>七、工程实践</h3>
+<ol class="qa" style="counter-reset: qa 24">
+<li><p class="q">测试怎么写的？</p>
+<p class="a">pytest + pytest-django，覆盖：意图路由、记忆隔离、统一检索、上下文预算、折叠并发、Reflection 并发、预处理 Chunk、LanceDB 索引、气泡解析、图片上传、FTS5 中文检索（jieba tokens 回归测试）、导入 prompt 质量（分类时态分流与自嘲过滤规则）；前端 token 刷新 single-flight 单测。默认不访问外部模型，llm_integration 用 marker 隔离。</p>
+</li>
+<li><p class="q">最得意/最难的工程问题？</p>
+<p class="a">推荐三个选题：① 中文 FTS5 分词方案（C2）；② 断点续跑流水线（C6 双指纹 + partial + 进度封顶 95%）；③ 并发一致性（C8 代际号 + CAS 抢占 + 两段式索引收敛竞态）。</p>
+</li>
+<li><p class="q">最大的坑？（诚实版见 Part E）</p>
+<p class="a">可讲：FTS5 unicode61 不切中文导致 MATCH 永远为空；fetch-event-source 401 重试带过期 token 头（前端）；TTS 双流不能交错只播最新响应的音频；折叠并发互相覆盖检查点。</p>
+</li>
+<li><p class="q">如果用户量上来了怎么办？</p>
+<p class="a">路线图：PostgreSQL + pgvector（事务/扩展）；多 worker 部署需把进程锁换成 DB 级锁；独立任务队列（Celery/arq）替代进程内后台线程；检索层 Adapter 已预留。多实例部署时 Reflection 抢占的 CAS 设计已经是为多 worker 准备的。</p>
+</li>
+</ol>
+</section>
+
+<section id="part-e">
+<h2><span class="no">E</span>容易被攻击的弱点与防御话术</h2>
+<blockquote>
+<p>面试官最爱问"你这个项目有什么缺点"。<b>主动说出来比被问出来好</b>，且每个弱点都要带一句"为什么是合理的 + 怎么演进"。</p>
+</blockquote>
+<div class="table-scroll"><table class="weak">
+<thead><tr><th>弱点</th><th>面试官可能的攻击角度</th><th>防御话术</th></tr></thead>
+<tbody>
+<tr><td>单机 SQLite，扩展性差</td><td>"用户多了怎么办"</td><td>个人数据场景的刻意选择，零运维；Adapter 已解耦，路线图是 pgvector 多实例</td></tr>
+<tr><td>折叠/预处理的进程锁只保证单 uvicorn worker</td><td>"并发部署就挂"</td><td>代码注释自曝假设；多 worker 需要 DB 级锁/任务队列——这是部署架构与并发模型绑定的典型认知，说明你想过</td></tr>
+<tr><td>检索分数不归一化</td><td>"排序科学吗"</td><td>刻意取舍：来源不可比，统一归一化是过度工程；去重靠内容 key 不靠分数（见 Q11）</td></tr>
+<tr><td>JWT 黑名单配置失效（token_blacklist 未装进 INSTALLED_APPS）</td><td>"logout 真能失效 token 吗"</td><td>诚实承认：目前 refresh token 靠 httponly cookie + 旋转，服务端吊销未生效；已知问题，个人项目可接受，多用户版需修复</td></tr>
+<tr><td>Reflection 文档声称 6 小时门槛，代码实际没有</td><td>"文档和代码不一致"</td><td>这恰好说明代码由 job 队列驱动（每轮聊天后 + 常驻 worker），docstring 是历史遗留——能指出文档谎言是加分项</td></tr>
+<tr><td><code>superseded</code> 状态定义了但没人写</td><td>"状态机不完整"</td><td>实际演进路径是 current→historical + replaced_by；superseded 是为未来"被明确废弃"预留的</td></tr>
+<tr><td>向量索引 append 无幂等</td><td>"重复索引会重复向量吗"</td><td>会；靠"读取端回查 DB + 全量重建命令"兜底，重建是安全的（行数校验 + 原子替换）</td></tr>
+<tr><td>重导入时 LanceDB drop 失败被吞掉</td><td>"旧向量残留"</td><td>残留向量靠权限隔离 + 读取端回查校验兜底，不影响正确性，只是索引不干净</td></tr>
+<tr><td>token 估算器是经验公式</td><td>"估算不准"</td><td>估算只用于决策，真实 usage 用于展示与校准；SOFT/HARD 双阈值给误差留缓冲</td></tr>
+<tr><td>单角色绑定单作者，多用户共享角色靠物化拷贝</td><td>"数据冗余"</td><td>private/public 可见性模型决定：私有隔离优先，public 才共享（物化拷贝保证可见性切换可回滚）</td></tr>
+<tr><td>LLM 调用成本</td><td>"每次回忆都检索+重排不便宜"</td><td>意图路由把成本花在刀刃上：闲聊零检索；LLM 分类只处理歧义；重排候选 ≤8 时跳过 LLM</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="part-f">
+<h2><span class="no">F</span>简历与口头表述模板</h2>
+<h3>简历 bullet（可直接用）</h3>
+<blockquote>
+<span class="tag">简历 bullet（可直接用）</span>
+<p><b>DeepEcho（千寻）｜Memory-Driven AI Companion｜个人全栈 AI 项目</b> 基于 FastAPI、Django、Vue 3、LangGraph、DeepSeek + GLM 构建多模态 AI 陪伴应用。设计 Imported Chat / Online Chat / Semantic Memory / 滚动摘要+阶段胶囊四层记忆体系，通过 FTS5 + LanceDB 混合检索、Query Rewrite、时间锚定检索、Rerank 与 Context Compressor 实现跨来源证据召回。实现 2.3 万条真实聊天数据的并发 Map/Reduce 预处理（5 worker、Chunk Checkpoint 双指纹断点续跑、partial 状态、进度封顶），关系时间线与角色 Style Profile 自动学习。使用持久日级 Reflection 任务（条件 UPDATE CAS 抢占、30 分钟超时回收、代际号并发防线）、原子写入与软/硬上下文预算（32K/40K、CJK 估算器）保证长任务可靠性与上下文可控；支持图片理解（GLM）、流式 TTS（DashScope）、结构化多气泡 IM 式回复与移动端适配。</p>
+</blockquote>
+<h3>口头讲述版（面试第一分钟）</h3>
+<blockquote>
+<span class="tag">口头讲述版（面试第一分钟）</span>
+<p>我做了个 AI 陪伴项目，核心是长期记忆。它能把上万条微信聊天记录加工成结构化记忆，聊天时按意图召回、按预算注入，所有记忆都有原文证据。技术上我解决了几类真问题：中文检索的分词坑、不可靠 LLM 的组织（断点续跑、防御解析、全面降级）、并发一致性、上下文预算。规模上我用 2.3 万条真实数据做过全量验证。</p>
+</blockquote>
+<h3>面试结尾问面试官的问题（可选）</h3>
+<ul>
+<li>你们目前 LLM 应用的记忆方案是什么？是全量塞上下文还是有检索链路？</li>
+<li>检索质量怎么评估的？有评测集吗？（展示你关注评估）</li>
+</ul>
+<h3>附：关键数字速查表（面试前过一遍）</h3>
+<div class="table-scroll"><table>
+<thead><tr><th>数字</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td>23,261 条 / 304 Chunk</td><td>全量验证数据集规模</td></tr>
+<tr><td>SOFT 32K / HARD 40K</td><td>输入上下文两级预算</td></tr>
+<tr><td>9000 token / 8000 字符</td><td>折叠触发阈值 / 每批折叠量</td></tr>
+<tr><td>最近 10 轮 / 6000 token</td><td>折叠后保留的原文</td></tr>
+<tr><td>±5 条消息</td><td>导入命中消息的窗口扩展</td></tr>
+<tr><td>≤24 字符</td><td>意图继承的短消息阈值</td></tr>
+<tr><td>20s 超时</td><td>Supervisor LLM 分类超时</td></tr>
+<tr><td>5 worker / 120 条 / 10000 字符 / overlap 6</td><td>预处理并行度与 Chunk 上限</td></tr>
+<tr><td>30 分钟 / 3 次</td><td>Reflection 超时回收 / 最大尝试</td></tr>
+<tr><td>access 2h / refresh 7d</td><td>JWT 有效期</td></tr>
+<tr><td>10MB / 3000 万像素</td><td>图片上传上限</td></tr>
+<tr><td>凌晨 5 点（最安静小时+1）</td><td>聊天日分界默认值</td></tr>
+<tr><td>top_k 30 → 重排 8</td><td>混合检索召回量 → 重排后保留量</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="part-g">
+<h2><span class="no">G</span>底层原理白话课</h2>
+<blockquote>
+<p>这一部分解决“我知道组件名字，但不知道它到底在做什么”的问题。面试时不要只背名词，先把每个组件放回它回答的那个问题：<b>SQLite 负责可靠保存，FTS5 负责按词找，LanceDB 负责按含义找，Semantic Memory 负责描述事实状态，Context 工程负责决定这一次把什么交给模型。</b></p>
+</blockquote>
+<h3>G1. 先建立一张“数据和投影”地图</h3>
+<p>同一段聊天会有多种表示，但它们不是同等重要的数据库：</p>
+<div class="table-scroll"><table>
+<thead><tr><th>东西</th><th>它回答的问题</th><th>项目中的例子</th><th>是否权威</th></tr></thead>
+<tbody>
+<tr><td>Imported Chat 原文</td><td>当时具体说了什么？</td><td><code>ChatMessage</code> 的 sender/content/timestamp/msg_index</td><td>是，SQLite</td></tr>
+<tr><td>Online Chat 原文</td><td>用户和 AI 后来聊了什么？</td><td><code>Message</code> 的 input/output/output_bubbles</td><td>是，SQLite</td></tr>
+<tr><td>Semantic Memory</td><td>从多轮证据中可以提炼出什么事实？现在还是历史吗？</td><td><code>SemanticMemory.fact</code>、confidence、memory_state</td><td>是，SQLite</td></tr>
+<tr><td>FTS5</td><td>原文中有没有出现这个词？</td><td><code>chat_fts_&lt;character&gt;</code> 虚拟表</td><td>否，可重建</td></tr>
+<tr><td>LanceDB</td><td>哪些文本和问题的含义最接近？</td><td><code>wechat_&lt;character&gt;</code>、<code>online_&lt;friend&gt;</code>、<code>semantic_&lt;friend&gt;</code></td><td>否，可重建</td></tr>
+<tr><td>TimeChunk / TopicTag / Relationship Overview</td><td>哪个时间段或话题可能相关？</td><td>时间范围、话题标签、关系阶段</td><td>否，派生结果</td></tr>
+<tr><td>Conversation Summary / Collapse</td><td>旧的在线聊天如何用少量文字延续？</td><td><code>Friend.conversation_summary</code>、<code>ConversationCollapse</code></td><td>否，读取投影</td></tr>
+<tr><td>Context</td><td>这一轮实际送进 LLM 的文字是什么？</td><td>system prompt + summary + memory + recent turns</td><td>每轮临时生成</td></tr>
+</tbody></table></div>
+<p>最容易讲错的一句话是“向量数据库里存了记忆”。更准确的说法是：<b>业务记忆存 SQLite，LanceDB 只存向量和必要的来源元数据/版本信息，负责把候选找出来；能映射到业务 ID 的候选必须回查 SQLite 的归属、<code>is_active</code>、锁定状态和当前/历史状态。</b></p>
+<h3>G2. SQLite 到底是什么：不是“一个小 Redis”，而是进程内的关系数据库</h3>
+<h4>先用一句人话理解</h4>
+<p>SQLite 是一个嵌入应用进程的关系型数据库引擎。它不要求单独启动数据库服务，数据通常落在一个 <code>db.sqlite3</code> 文件里；Django ORM 通过 SQL 读写这个文件。它仍然有表、行、列、主键、外键、索引、事务和约束，只是服务端、连接池和网络层很轻。</p>
+<p>本项目的选择逻辑是：<b>数据规模是单机个人项目、需要事务和可备份性、还不希望维护 PostgreSQL/ES/Milvus 集群，所以 SQLite 是合适的权威源；向量检索再交给本地 LanceDB。</b> 这不是说 SQLite 在所有场景都更好，而是当前约束下总成本最低。</p>
+<h4>表、索引、虚拟表分别是什么</h4>
+<ul>
+<li><b>表（table）</b>：保存业务事实。例如 <code>chat_message</code> 的一行就是一条导入消息，<code>semantic_memory</code> 的一行就是一条结构化事实。</li>
+<li><b>索引（index）</b>：为某种查询额外维护的数据结构。普通 B-tree 索引可以让“某个角色的消息按 <code>msg_index</code> 排序”更快，但它不等于另一份业务数据。</li>
+<li><b>虚拟表（virtual table）</b>：表面像表，实际由 SQLite 的扩展实现查询逻辑。FTS5 就是这种形式；它内部维护倒排索引，不是把全文查询退化成普通 <code>LIKE</code>。</li>
+<li><b>外键</b>：例如 <code>ChatMessage.character_id</code>、<code>Message.friend_id</code>、<code>MemoryEvidence.memory_id</code>，把数据关系固定下来，避免只靠字符串拼接。</li>
+</ul>
+<p>可以把一条导入消息想成下面这样：</p>
+<pre><code>chat_message
+id           = 417
+character_id = 3
+msg_index    = 1208
+sender       = 小千
+content      = 明天生日想吃火锅
+timestamp    = 2024-02-01 13:43:00
+
+chat_fts_3__import_xxx
+rowid        = 417          ← 对回 chat_message.id
+sender       = 小千
+content      = 明天生日想吃火锅
+tokens       = 明天 生日 想 吃 火锅  ← jieba 预分词</code></pre>
+<p>FTS5 的 <code>rowid</code> 不是新的业务主键，而是故意使用原消息的 <code>id</code>。这样全文索引只负责找候选，拿到 rowid 后仍回到 <code>ChatMessage</code> 读取完整内容和上下文窗口。</p>
+<h4>Django ORM 在这里做了什么</h4>
+<pre><code>Message.objects.filter(friend_id=friend_id).order_by("-id")[:100]</code></pre>
+<p>ORM 会把 Python 表达式翻译成 SQL，帮你处理参数绑定、模型映射、迁移和事务。它适合业务表的 CRUD；但 <code>CREATE VIRTUAL TABLE ... USING fts5</code>、<code>MATCH</code> 这些是 SQLite 专用能力，Django 模型字段无法完整表达，所以项目在 <code>api/import_data.py</code> 和检索器里使用了受控的 raw SQL。</p>
+<p>面试时可以这样说：<b>我没有因为用了 Django ORM 就拒绝 SQL；业务关系和事务用 ORM，FTS5 的虚拟表和 MATCH 查询用参数化 raw SQL，边界是清晰的。</b></p>
+<h4>事务为什么重要</h4>
+<p>事务的核心是“这一组写入要么全部生效，要么全部不生效”。导入时不能出现“原文已经换成新版本，但 FTS5 还是旧版本”的半成品状态。</p>
+<p>项目的导入发布顺序可以这样理解：</p>
+<pre><code>1. 生成新的 import version
+2. 先在 LanceDB 建临时向量表并检查行数
+3. 在 SQLite transaction.atomic() 中重建 ChatMessage + FTS5
+4. 同一个事务内更新 Character.import_data_version
+5. 事务提交后，读请求才会解析到新版本
+6. 清理旧投影失败也不回滚已发布的权威数据</code></pre>
+<p>这里的 <code>import_data_version</code> 是一个<b>发布指针</b>：查询不靠猜“哪张表最新”，而是先读当前版本，再拼出当前 FTS5/LanceDB 表名。新导入失败时旧指针仍然有效，用户不会看到一半新、一半旧的导入。</p>
+<h4>SQLite 的并发边界：不要把它夸成 PostgreSQL</h4>
+<p>SQLite 很适合本项目，但它不是高并发写数据库。它的关键事实是：<b>同一时刻写入能力有限，锁粒度和具体 journal 模式受 SQLite 后端影响，<code>select_for_update()</code> 也不能被表述成 PostgreSQL 那种真正的行级锁。</b></p>
+<p>本项目的并发设计因此是组合拳：</p>
+<ul>
+<li>单 uvicorn 进程下，滚动折叠使用 per-Friend 进程锁；</li>
+<li>需要清空历史、写入 Reflection 时，用 <code>transaction.atomic()</code> + <code>select_for_update()</code> 表达串行化意图；</li>
+<li>更关键的是 <code>online_history_generation</code> 代际号：请求开始记下代次，提交时发现代次变化就丢弃旧结果；</li>
+<li>多进程/多实例部署时，进程锁不能覆盖所有 worker，应该迁移到 PostgreSQL 的数据库锁/任务队列。</li>
+</ul>
+<p>被问“你这不是假行锁吗？”时，推荐回答：<b>是的，SQLite 场景不能把它包装成完整的 PostgreSQL 行锁语义。我把它和单进程部署假设、代际校验、事务一起使用，保证当前部署模型下不把旧结果重新写回来；如果扩展到多 worker，我会换数据库级锁和外部任务队列。</b> 这种回答比硬说“SQLite 有行锁”更可信。</p>
+<h3>G3. FTS5 到底怎么找词：倒排索引，而不是每行扫一遍</h3>
+<h4>倒排索引的直觉</h4>
+<p>普通 <code>LIKE '%生日%'</code> 的思路是：把每一行内容拿出来检查，数据越多越慢。全文搜索的思路相反：<b>预先建立“词 → 包含这个词的行号列表”</b>。</p>
+<pre><code>词                倒排列表（posting list）
+生日              [417, 952, 1801]
+火锅              [417, 420, 1801, 2300]
+工作              [88, 420, 761]</code></pre>
+<p>查询“生日”时，FTS5 直接取 <code>生日</code> 的 posting list，再把 rowid 对回消息。查询多个词时，它可以做 OR/AND/短语等组合，并根据全文匹配规则排序。</p>
+<h4>为什么默认 tokenizer 对中文会踩坑</h4>
+<p>FTS5 不是“自动理解中文”的组件。它要先把原文切成 token；项目遇到的问题是，<code>unicode61</code> 对连续中文缺少中文词边界知识，整段中文可能被视为一个连续 token。于是原文里虽然有“生日”三个字，索引里未必有一个独立的 <code>生日</code> token，<code>MATCH "生日"</code> 就可能查不到。</p>
+<p>项目采用的是<b>应用侧预分词 + FTS5 负责索引</b>：</p>
+<pre><code>原文：我明天生日想吃火锅
+      ↓ jieba
+tokens 字段：我 明天 生日 想 吃 火锅
+      ↓ FTS5 unicode61 按空格识别
+独立 token：我 / 明天 / 生日 / 想 / 吃 / 火锅</code></pre>
+<p>写入端和查询端必须对齐：</p>
+<ol>
+<li>写入消息时用 jieba 把结果空格连接，放进 <code>tokens</code> 列；</li>
+<li>查询时也用 jieba 切用户问题；</li>
+<li>过滤太短的中文片段，并保留长度足够的英文词；</li>
+<li>用带引号的词组拼出 <code>MATCH</code> 查询；</li>
+<li>FTS5 没命中或异常时，用有限个 <code>content LIKE</code> 做兜底。</li>
+</ol>
+<p>项目当前的混合检索器把关键词按 <code>OR</code> 连接，所以“生日 火锅”会扩大召回范围；之后由去重、相关性排序和上下文预算控制最终注入量。面试官若追问“为什么不 AND”，可以回答：<b>召回阶段更怕漏掉证据，先 OR 扩大候选；精排阶段再判断是否同时满足问题语义。</b> 如果是精确短语，可以进一步使用 FTS5 phrase query。</p>
+<h4><code>rank</code>、应用分数和 LIKE 兜底要分开</h4>
+<p>FTS5 自己可以根据匹配情况提供 <code>rank</code> 排序；项目 SQL 使用 <code>ORDER BY rank</code> 取出结果，但在 Python 统一候选时，FTS5 结果使用来源默认分 <code>1.0</code>，LIKE 兜底使用 <code>0.8</code>，并没有把 SQLite 的 BM25 数值和 LanceDB 距离直接当作同一量纲。这个区别要讲清楚：</p>
+<ul>
+<li><code>rank</code>：SQLite FTS5 内部用于排序的全文匹配结果；</li>
+<li><code>score</code>：项目在不同检索适配器之间传递的粗粒度相关性分；</li>
+<li><code>distance</code>：LanceDB 返回的距离，数值越小越近；项目转换为 <code>1 / (1 + distance)</code>，变成越大越相关。</li>
+</ul>
+<h4>FTS5、LIKE、向量各自擅长什么</h4>
+<div class="table-scroll"><table>
+<thead><tr><th>方案</th><th>擅长</th><th>典型问题</th></tr></thead>
+<tbody>
+<tr><td>FTS5</td><td>人名、日期、原话、专有名词、明确关键词</td><td>“生日”与“出生日期”不是同一个词</td></tr>
+<tr><td><code>LIKE</code></td><td>很小范围的子串兜底、索引异常时保可用</td><td>通常要扫描，不能作为主检索</td></tr>
+<tr><td>向量</td><td>同义表达、语义相近但字面不同的问题</td><td>可能把“相似但不是这件事”的内容找回来</td></tr>
+</tbody></table></div>
+<p>所以“生日是哪天”既需要 FTS5 找到明确“生日”证据，也可以用向量找“出生日期/过生日”的表达；两路结果合并以后仍要重排和引用证据。</p>
+<h3>G4. LanceDB 到底怎么找“意思”：向量、距离和元数据</h3>
+<h4>Embedding 不是记忆，是一种坐标表示</h4>
+<p>Embedding 模型把一段文字映射成固定长度的数字数组：</p>
+<pre><code>“我最近不太能吃辣” → [0.12, -0.04, ..., 0.31]  （项目使用 1024 维）
+“这段时间肠胃不适，火锅先算了” → [0.11, -0.03, ..., 0.29]</code></pre>
+<p>语义相近的文本，在模型学到的向量空间里通常更接近。查询时，用户问题也要用<b>同一个 embedding 模型</b>转成向量，然后在 LanceDB 中找距离最近的文本。项目的 <code>CustomEmbeddings</code> 通过 DashScope <code>text-embedding-v4</code>，文档批量 10 条，维度 1024；查询和入库共用这个封装，避免维度或模型不一致。</p>
+<h4>距离为什么要转换</h4>
+<p>LanceDB/LangChain 适配器返回的是 distance，代码注释已经说明“越小越近”。但项目其他排序逻辑统一采用“越大越相关”，所以转换为：</p>
+<pre><code>relevance = 1 / (1 + max(0, distance))</code></pre>
+<p>这不是把不同来源的分数变成了严格可比的概率，只是统一了排序方向。FTS5 的 <code>1.0</code>、LIKE 的 <code>0.8</code>、向量的 relevance 仍然来自不同分布，因此当前系统依赖候选来源策略和后续 rerank，而不是宣称一个数学上完美的总分。</p>
+<h4>LanceDB 表里除了向量还要存什么</h4>
+<p>向量命中后必须知道它对应哪条业务数据，因此项目为不同范围建立表，并把业务 ID 写入 metadata：</p>
+<div class="table-scroll"><table>
+<thead><tr><th>LanceDB 表</th><th>向量来源</th><th>元数据回查</th></tr></thead>
+<tbody>
+<tr><td><code>wechat_&lt;character&gt;__import_&lt;version&gt;</code></td><td>Imported Chat 文本块/关键消息</td><td>当前导入版本；精确消息证据主要由 FTS5 rowid/TimeChunk 补齐</td></tr>
+<tr><td><code>online_&lt;friend&gt;</code></td><td>一轮 Online Chat 的用户输入+AI 输出</td><td><code>Message.id</code></td></tr>
+<tr><td><code>semantic_&lt;friend&gt;</code></td><td><code>SemanticMemory.fact</code></td><td><code>memory_id</code></td></tr>
+</tbody></table></div>
+<p>读取流程不是“LanceDB 说命中就直接注入”。对 Online Chat/Semantic Memory，向量 metadata 能映射到业务 ID；对 Imported Chat，当前版本指针保证候选来自当前发布，精确证据再由 FTS5、TimeChunk 或消息窗口补齐：</p>
+<pre><code>向量 top-k
+  → Online/Semantic：读取 metadata.message_id / memory_id
+  → 按 friend/character 归属回查 SQLite，过滤删除和权限不符的数据
+  → Imported：确认当前 import version，精确命中交给 FTS5 rowid/TimeChunk 定位
+  → 把完整原文/事实和状态重新格式化
+  → 才进入候选排序和上下文预算</code></pre>
+<p>这就是为什么旧向量即使暂时没有清干净，也不能复活一条已删除的记忆：正确性依靠 SQLite 回查，索引清洁度交给重建任务。</p>
+<h4>为什么不把 LanceDB 当权威源</h4>
+<p>向量有三个天然问题：</p>
+<ol>
+<li>embedding 模型升级后，旧向量需要重新计算；</li>
+<li>删除和权限变化要求索引及时同步；</li>
+<li>向量只表达“相似”，不表达 <code>current</code>、<code>historical</code>、<code>is_locked</code>、<code>valid_to</code> 这些业务语义。</li>
+</ol>
+<p>因此项目把它当 projection：新事实可以 append，完整重建则从 SQLite active facts 重新 embedding，先写临时表、验证行数，再替换 live 表；构建失败就保留旧表，不影响权威数据。面试可以概括为：<b>向量库保证召回效率，关系库保证业务真相。</b></p>
+<h3>G5. “四层记忆”到底怎么分：按保真度、抽象度和时效性分层</h3>
+<h4>四层不是四个互相独立的脑子</h4>
+<p>它们是一条从原文到上下文的流水：</p>
+<pre><code>原始对话                         结构化事实                     本轮上下文
+Imported Chat ───────┐       Semantic Memory ───────┐
+                     ├─提炼→ current/historical     ├─按意图选择→ LLM
+Online Chat ─────────┘       Time/Topic/Overview ────┤
+                                  Summary/Collapse ───┘</code></pre>
+<h4>每层具体解决什么问题</h4>
+<p><b>第一层：Imported Chat 原文。</b> 这是导入的微信消息，保留 sender、timestamp、msg_index 和原始 content。它回答“当时到底说了什么”，适合找原话、共同经历和具体日期。它不会因为提炼失败而消失。</p>
+<p><b>第二层：Online Chat 原文。</b> 这是用户和 AI 后续产生的 <code>Message</code>，保留 input、output、output_bubbles、token usage 和 reply provenance。它回答“这次对话发生了什么”，也是 Reflection 的直接输入。Reflection 不直接看旧摘要来猜事实，而是直接看待处理的在线原文，避免摘要误差层层放大。</p>
+<p><b>第三层：Semantic Memory。</b> 这是长期事实的结构化表，不是简单的一段 profile 文本。关键字段有：</p>
+<ul>
+<li><code>subject</code>：用户、女友、两人关系，防止把角色说的话归到用户身上；</li>
+<li><code>category</code>：identity / preference / experience / relationship；</li>
+<li><code>confidence</code>：证据强度，不等于模型自信的绝对真值；</li>
+<li><code>memory_state</code>：current / historical / superseded；</li>
+<li><code>valid_from</code> / <code>valid_to</code>：状态有效区间；</li>
+<li><code>trajectory_key</code>：将“用户喜欢辣 → 暂时不能吃辣 → 又能吃辣”串成同一条变化轨迹；</li>
+<li><code>is_locked</code> / <code>is_mutable</code>：用户锁定的事实不能被自动替换；</li>
+<li><code>MemoryEvidence</code>：反向关联导入消息的 <code>msg_index</code>、在线消息 ID 或用户声明。</li>
+</ul>
+<p><b>第四层：滚动摘要和阶段胶囊。</b> 它服务的是“延续正在进行的对话”，不是替代原文。较早的 Online Chat 被压成固定区块的工作摘要；每个被折叠的范围还保存 <code>ConversationCollapse(start_message_id, end_message_id, summary, topics)</code>，以后问“前几天聊的那件事”时可以先定位阶段，再决定是否展开原文。</p>
+<p>此外，<code>TimeChunk</code>、<code>TopicTag</code>、<code>relationship_overview</code> 是导入侧的定位投影，<code>Friend.memory</code> 是兼容性/展示缓存，<code>build_core_memory_context()</code> 每轮从当前高置信度事实重新选小画像。它们都不应被说成“唯一记忆源”。</p>
+<h4>一个事实如何演化</h4>
+<p>假设原文先后出现：</p>
+<pre><code>2024-01：用户喜欢吃辣
+2024-06：用户最近胃不舒服，暂时不能吃辣
+2024-10：用户说现在又可以吃辣了</code></pre>
+<p>系统希望得到的是：</p>
+<div class="table-scroll"><table>
+<thead><tr><th>fact</th><th>state</th><th>valid_to</th><th>trajectory_key</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>用户喜欢吃辣</td><td>historical</td><td>2024-06 左右</td><td><code>user.preference.spiciness</code></td><td>旧状态，保留以回答“以前”</td></tr>
+<tr><td>用户暂时不能吃辣</td><td>historical</td><td>2024-10 左右</td><td><code>user.preference.spiciness</code></td><td>中间状态</td></tr>
+<tr><td>用户现在又可以吃辣</td><td>current</td><td>空</td><td><code>user.preference.spiciness</code></td><td>当前回答优先</td></tr>
+</tbody></table></div>
+<p>如果用户问“我现在能不能吃辣”，读取端优先 current；如果问“我口味怎么变化的”，<code>needs_state_trajectory</code> 触发同一 <code>trajectory_key</code> 的历史链路展开。这样“更新”不是删除历史，而是把状态转换关系记录下来。</p>
+<h4>事实写入和召回是两条不同链路</h4>
+<pre><code>写入：原文 → Map/Reflection → JSON 防御解析 → 分类/时态/证据校验 → SemanticMemory → LanceDB projection
+
+召回：问题 → 意图/时间判断 → current facts + trajectory + 原文证据 → 去重/重排/压缩 → Context</code></pre>
+<p>不要说“模型自己记住了”。更准确是：<b>系统把模型输出的候选事实持久化，并在下一轮把经过权限、状态和预算筛选的内容重新放进 prompt；这是一种外部记忆，不是模型参数发生了永久学习。</b></p>
+<h3>G6. 上下文工程到底在做什么：把“全部历史”变成“本轮最有用的投影”</h3>
+<h4>先区分三个容易混淆的词</h4>
+<ul>
+<li><b>历史（history）</b>：数据库里的所有原文记录。</li>
+<li><b>记忆（memory）</b>：从历史中提炼出的事实、时间线、证据和摘要。</li>
+<li><b>上下文（context）</b>：本次模型调用真正收到的 system prompt、历史消息、摘要和召回结果。</li>
+</ul>
+<p>历史可以无限增长，模型上下文不行；记忆也不是越多越好，因为过期或错误事实会污染回答。上下文工程就是在每轮读时做选择、排序、截断和组装。</p>
+<h4>项目实际的预算层次</h4>
+<div class="table-scroll"><table>
+<thead><tr><th>区域</th><th>默认上限/阈值</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td>SOFT 输入预算</td><td>32K token</td><td>进入压力区，开始优先缩减低优先级内容</td></tr>
+<tr><td>HARD 输入预算</td><td>40K token</td><td>不能继续无界增长的硬边界</td></tr>
+<tr><td>Recent History</td><td>约 6K token</td><td>保留最近原文，保证指代和语气连续</td></tr>
+<tr><td>Working History</td><td>约 9K token</td><td>未折叠在线聊天达到此量就触发滚动折叠</td></tr>
+<tr><td>Summary</td><td>约 1.8K token</td><td>较早在线聊天的固定工作摘要</td></tr>
+<tr><td>Memory Context</td><td>默认最多 6K token</td><td>语义事实、证据、轨迹、时间段等按意图分配</td></tr>
+</tbody></table></div>
+<p>代码里的 CJK 估算器是：</p>
+<pre><code>estimate ≈ ceil(0.9 × CJK 字符数 + 非 CJK 字符数 / 3.2)</code></pre>
+<p>它不是任何一个 provider 的真实 tokenizer，只用于在发请求前做安全决策。每轮拿到 provider 的真实 input usage 后，写进诊断信息作为校准锚点；面试时要明确说“这是保守估算器，不是精确 token 计费器”。</p>
+<h4>组装顺序为什么要这样排</h4>
+<p>Conversation Agent 的思路是：</p>
+<pre><code>稳定前缀：base prompt + 角色设定 + Style Profile + 固定输出协议 + 核心画像
+动态区块：较早在线摘要 + 本轮记忆区块 + 时间上下文 + 情绪语气提示
+最近消息：当前对话消息
+图片（若有）：只在最终视觉模型调用时附加</code></pre>
+<p>稳定角色规则放前面，动态内容放后面，是为了让 provider 的自动 prompt cache <b>有机会</b>复用稳定前缀；这不是保证每家 provider 都命中缓存。当前问题、最新时间和情绪靠近模型最后决策点，减少它被旧摘要覆盖的概率。</p>
+<h4>不是所有记忆区块平均分配</h4>
+<p><code>assemble_memory_sections()</code> 会先根据 memory intent 给区块排序，再应用总预算。例如：</p>
+<div class="table-scroll"><table>
+<thead><tr><th>用户问题</th><th>更优先的区块</th><th>原因</th></tr></thead>
+<tbody>
+<tr><td>“你把那句话原话说一下”</td><td>raw evidence</td><td>引用请求最怕摘要改写原文</td></tr>
+<tr><td>“我以前在哪个学校？”</td><td>trajectory / collapse / raw evidence</td><td>需要历史状态和时间顺序</td></tr>
+<tr><td>“我喜欢吃什么？”</td><td>semantic</td><td>当前稳定事实优先，原文只作证据</td></tr>
+<tr><td>“我们怎么认识的？”</td><td>early time scope / relationship overview / raw</td><td>先定位关系早期，再补具体聊天</td></tr>
+<tr><td>“我难过时你通常怎么哄我？”</td><td>relationship overview / semantic / raw</td><td>需要互动规律，并用原文确认</td></tr>
+</tbody></table></div>
+<p>预算不够时，代码对单个区块做二分截断并追加“其余低优先级检索证据因上下文预算未注入”的 marker，而不是默默假装所有内容都送进去了。这种诊断信息很适合面试现场展示。</p>
+<h4>滚动折叠为什么要保留原文尾部</h4>
+<p>当未摘要 Online Chat 超过约 9000 token，系统从旧到新分批处理，每批约 8000 字符；每批产生：</p>
+<ol>
+<li>合并后的 <code>working_summary</code>，包含覆盖范围、进行中的话题、待办、当前情绪、已变化状态和必须保留的事实；</li>
+<li>该范围单独的 <code>collapse_summary</code> 和 topics；</li>
+<li><code>summary_through_message_id</code> 检查点。</li>
+</ol>
+<p>最近至少 10 轮原文保留在上下文中，因为它们包含当前代词、语气、未完成问句和刚刚发生的承诺；只留摘要会让对话“知道发生过，但接不上这句话”。折叠失败时返回有界的原文尾部，保证能力下降但不丢消息。</p>
+<h3>G7. 一次“回忆类问题”如何从输入走到 prompt</h3>
+<p>以用户问“我以前在哪个学校读书？”为例：</p>
+<pre><code>1. Supervisor 发现“以前”，把意图送到 Memory Agent
+2. detect_memory_intent 得到：target_subject=user、time_mode=historical、category_hint=identity/experience
+3. Query Planner 生成最多 3 个检索 query，并决定偏向导入原文或在线聊天
+4. Semantic Memory 关键词/向量检索；若命中 trajectory_key，则补齐这条状态轨迹
+5. TimeChunk/relationship capsule 用于定位早期或具体时间范围
+6. Imported Chat + Online Chat 做统一混合检索；导入命中扩展 ±5 条消息
+7. 候选跨来源去重，最多 30 个候选送 LLM Reranker，最终保留约 8 个
+8. 保留必要的来源多样性：不能只剩一条向量相似文本
+9. 非引用型长原文超过阈值时 Context Compressor 压缩；失败就硬截断
+10. Conversation Agent 按 historical 权重组装 trajectory/collapse/raw/semantic
+11. 最终模型只看到整理后的记忆上下文，不知道内部调用了哪些工具</code></pre>
+<p>这条链路体现了一个重要取舍：<b>召回、验证、压缩、生成是不同职责。</b> 不能让向量 top-k 直接成为答案，也不能让生成模型自己“脑补”缺失证据。</p>
+<h3>G8. Map/Reduce、Reflection 和“记忆何时更新”</h3>
+<h4>导入预处理为什么不能一次把 2.3 万条消息塞给模型</h4>
+<p>一次性输入会遇到上下文上限、费用高、失败重试成本大、输出难定位四个问题。项目把消息按聊天日组织，再按 120 条或 10000 字符切成 bounded Chunk，overlap 6 条保留边界语境。</p>
+<p>每个 Chunk 的 Map 输出摘要、话题、客观事件、用户事实、角色事实、关系事实，并要求每条事实携带真实 <code>msg_index</code> 证据。Map 结果按 chunk index 持久化，5 worker 并行；关系概览再做日/月/年/全局的时间归约。Style Profile 是另一条全量角色消息统计+LLM 编译路径，不能与关系 Reduce 混为一谈。</p>
+<h4>Reflection 为什么直接看 Online Chat 原文</h4>
+<p>在线聊天每到可处理的聊天日，由持久化 <code>ReflectionJob</code> 驱动。它读取用户输入和 AI 输出，连同时间戳、已有事实一起交给模型，再根据 <code>conflicts_with</code> / <code>replaces</code> 处理冲突。写入成功后再给新事实建向量；如果此时用户清空历史导致 generation 变化，就删除刚追加的向量并放弃旧结果。</p>
+<p>这条链路说明“滚动摘要”和“长期事实提炼”目的不同：摘要追求工作连续性，Reflection 追求可审计的事实演化；一个不能简单替代另一个。</p>
+<h3>G9. RAG 质量如何讲：不要把“有检索”说成“检索准确率高”</h3>
+<p>如果面试官问“你怎么证明 RAG 有效”，建议诚实分层回答：</p>
+<ol>
+<li><b>工程正确性</b>：有 FTS5 中文回归测试、LanceDB 空表/距离方向测试、归属隔离测试、索引重建和失败回滚测试。</li>
+<li><b>数据规模验证</b>：用 2.3 万条真实消息完成全量导入和预处理，验证长任务、断点、失败状态和恢复路径。</li>
+<li><b>当前不足</b>：项目有检索链路和可观测 provenance，但还没有一套人工标注的“问题—黄金证据”评测集，因此不应虚构 Recall@K、MRR 或准确率数字。</li>
+<li><b>下一步</b>：抽样构造回忆问题集，标注正确 message_refs / memory_ids，分别测 Recall@K、Precision@K、rerank NDCG、端到端 grounded answer rate，并按 current/historical、导入/在线来源分桶。</li>
+</ol>
+<p>这样回答的重点是：<b>我知道组件能跑和系统质量被证明是两件事，并且知道下一步怎么量化。</b></p>
+</section>
+
+<section id="part-h">
+<h2><span class="no">H</span>面试作战手册</h2>
+<blockquote>
+<p>面试官不要求你把源码背出来，而是想确认三件事：你是否真的理解数据流；设计是否由约束驱动；出现故障时是否知道边界、回滚和演进方式。下面的答案都按“先结论，再原理，再项目证据，最后取舍”组织。</p>
+</blockquote>
+<h3>H1. 开场的 90 秒版本</h3>
+<blockquote>
+<span class="tag">H1. 开场的 90 秒版本</span>
+<p>我做的是一个有长期记忆的多模态 AI 陪伴系统。核心不是简单给角色加一个 Prompt，而是把真实聊天记录加工成可追溯、可演化、按需召回的外部记忆。</p>
+<p>数据侧我把原文和派生结论分开：Imported Chat 和 Online Chat 保存在 SQLite，SQLite 是唯一权威源；Semantic Memory 保存带主体、分类、置信度、时效区间、演变轨迹和 MemoryEvidence 的长期事实；FTS5 和 LanceDB 分别作为中文关键词和语义向量投影，需要时可以从 SQLite 重建。</p>
+<p>导入侧按聊天日切 Chunk，5 个 worker 并行做 Map，结果按双指纹写 checkpoint；关系概览做时间归约，Style Profile 从角色本人消息的统计分布学习。在线侧用 LangGraph 编排 Supervisor、Memory、Emotion、Conversation 四个节点，闲聊走快路径，只有回忆和事实问题才检索。Memory Agent 先做时间和语义规划，再混合 FTS5、词法和 LanceDB，去重、重排、压缩后按上下文预算注入。</p>
+<p>我重点解决了三类工程问题：中文 FTS5 默认分词不适合中文、LLM 输出和长任务需要可恢复与降级、SQLite 权威数据和向量投影之间要处理并发和过期。最后用 2.3 万条真实消息做了全量验证。当前边界是单机 SQLite 和单进程折叠锁；如果上多实例，我会迁移 PostgreSQL/pgvector、数据库级锁和外部任务队列。</p>
+</blockquote>
+<p>这段话说完以后，主动停下来，让面试官选择深入方向。不要一上来把所有技术名词连续念完。</p>
+<h3>H2. 三道核心题的“可直接口述”答案</h3>
+<h4>题一：SQLite、FTS5、LanceDB 为什么这样组合？</h4>
+<blockquote>
+<p>这三个组件解决的不是同一个问题。SQLite 是关系数据库，保存 ChatMessage、Message、SemanticMemory 和证据，是业务真相；FTS5 是 SQLite 的全文搜索虚拟表，内部是倒排索引，擅长找“生日、人名、原话”这类字面关键词；LanceDB 保存文本 embedding，擅长找字面不同但含义相近的内容。Online/Semantic 向量带业务 ID 回查，Imported 向量以当前导入版本为边界，精确消息证据由 FTS5/时间投影补齐。</p>
+<p>之所以 SQLite 做权威源，是因为这个项目是单机个人数据规模，需要事务、外键和简单备份；FTS5 零部署，适合几万条消息；LanceDB 也是本地文件型向量库，能和 Python 集成，不需要单独维护 Milvus 服务。两种索引都只是 projection：FTS5 坏了可以从 ChatMessage 重建，LanceDB 坏了可以从 SQLite 的事实或原文重新 embedding。</p>
+<p>中文 FTS5 的坑是默认 tokenizer 不理解中文词边界，所以我用 jieba 在写入和查询两侧对齐预分词 tokens；Semantic/Online 向量结果拿到后还要用 memory_id/message_id 回查 SQLite，Imported 向量则依赖当前版本指针并由 FTS5/TimeChunk 补精确证据，不能直接把向量命中当成最终事实。未来用户规模和并发上来，会把关系源迁到 PostgreSQL，向量可以迁 pgvector 或保留独立向量服务。</p>
+</blockquote>
+<h4>题二：你的长期记忆是怎么分层和演化的？</h4>
+<blockquote>
+<p>我把它分成原文、事实、工作摘要三个抽象层。Imported Chat 和 Online Chat 是原文，分别对应导入历史和产品运行后的新对话；Semantic Memory 是结构化长期事实，例如“用户目前在 B 大学读研”，它带 subject、category、confidence、valid_from/valid_to、current/historical、trajectory_key 和 MemoryEvidence；滚动 summary/collapse 是为了在上下文窗口有限时延续近期工作状态。</p>
+<p>分层的关键是原文永远不被摘要覆盖。模型提炼错了，可以通过 evidence 回到 msg_index 或 Message.id；状态变化也不删除旧事实，而是把旧 fact 转 historical，新的 fact 成为 current，通过 trajectory_key 串成演变轨迹。用户锁定的事实不会被自动替换。</p>
+<p>导入时由 Map 分析 chunk，写入 import 来源事实；在线聊天按聊天日进入 Reflection，直接读取在线原文并和已有事实比较。下一轮不是把所有层都塞进去，而是由问题类型决定：当前事实优先 Semantic Memory，原话优先 raw evidence，问变化过程就展开 trajectory，问旧阶段就先用 collapse/time scope 定位。</p>
+</blockquote>
+<h4>题三：上下文 32K/40K 具体怎么做？</h4>
+<blockquote>
+<p>我没有尝试把全部历史塞进模型，而是做 read-time projection。静态角色设定、风格和输出协议组成稳定前缀；较早在线聊天压成工作摘要；最近至少 10 轮保留原文；记忆 Agent 生成的语义事实、时间线和原文证据按意图分配预算。</p>
+<p>预算上有 SOFT 32K 和 HARD 40K，摘要约 1800 token，最近原文约 6000 token，记忆上下文默认最多 6000 token，未摘要在线历史约 9000 token 时触发折叠。发请求前用保守的 CJK 估算器做截断，收到 provider 的真实 usage 后记录诊断。遇到预算压力时先缩低优先级 evidence，而不是删除角色核心规则或最近对话。</p>
+<p>我还按问题类型调整区块权重：引用问题保留 raw，当前事实问题保留 semantic，历史演变问题保留 trajectory 和 collapse。折叠失败则返回有界原文，LLM 压缩失败则硬截断；所以预算系统的目标是让回答变短或降级，而不是让整轮请求因为历史太长直接失败。</p>
+</blockquote>
+<h3>H3. 面试官逐层追问表</h3>
+<div class="table-scroll"><table>
+<thead><tr><th>面试官问</th><th>推荐答法</th><th>如果继续追问</th></tr></thead>
+<tbody>
+<tr><td>SQLite 和普通文件有什么区别？</td><td>SQLite 是带 SQL、事务、索引和约束的关系数据库引擎，只是嵌入进程，不需要独立服务。</td><td>讲 table/index/transaction，以及单写者边界。</td></tr>
+<tr><td>为什么不用 JSON 文件保存记忆？</td><td>JSON 适合导出，不适合多条件查询、事务更新、外键和并发一致性；我的 facts/evidence/state 都需要关系查询。</td><td>讲 SQLite 的 ORM、迁移、索引和原子写入。</td></tr>
+<tr><td>FTS5 是不是数据库？</td><td>它是 SQLite 的全文搜索虚拟表/索引能力，能查询但不是业务权威表。</td><td>讲倒排索引和 rowid 回查。</td></tr>
+<tr><td>jieba 为什么要在写入和查询两边都做？</td><td>FTS5 的 token 必须一致；只在查询侧分词，索引里没有独立中文词仍然匹配不到。</td><td>讲 tokens 列、空格边界和 LIKE 兜底。</td></tr>
+<tr><td>FTS5 和 LIKE 哪个快？</td><td>FTS5 适合主检索，倒排索引避免逐行扫描；LIKE 是有限结果的兜底，不应当是主路径。</td><td>讲当前实现的 <code>keywords[:3]</code> bounded fallback。</td></tr>
+<tr><td>向量检索是不是更高级？</td><td>不是更高级，是回答不同问题；原话/人名适合词法，改写/同义表达适合向量，二者互补。</td><td>举“生日/出生日期”和“不能吃辣/胃不舒服”例子。</td></tr>
+<tr><td>LanceDB 返回的 score 是什么？</td><td>适配器返回 distance，越小越近；项目转换成 <code>1/(1+d)</code> 统一为越大越相关。</td><td>说明这不是跨来源概率，仍需 rerank/策略。</td></tr>
+<tr><td>为什么向量结果还要查 SQLite？</td><td>处理删除、权限、friend/character 归属、current/historical 和锁定状态；向量库只负责候选召回。</td><td>讲 stale vector 不能复活已删除记忆。</td></tr>
+<tr><td>记忆冲突怎么处理？</td><td>先区分主体和类别，再看是否可变；可变当前事实通过 replaces 转历史，新的成为 current；不可变/锁定事实不自动覆盖。</td><td>讲 trajectory_key 和 <code>replaced_by</code>。</td></tr>
+<tr><td>为什么“过去状态”不覆盖“当前状态”？</td><td>“曾经在 A 学校”是不可逆经历，应追加；“目前在 B 学校”是当前状态，同维度变化才替换旧 current。</td><td>讲 identity 收窄和 preference/experience 时态分流。</td></tr>
+<tr><td>摘要错了怎么办？</td><td>摘要只是读取投影，原始 Message 不删除；可以从 checkpoint 重新折叠，回忆类问题还能查 collapse/raw。</td><td>讲失败 fallback 和 checkpoint。</td></tr>
+<tr><td>为什么不每轮都搜全部记忆？</td><td>延迟、成本和噪声都更高；Supervisor 先路由，闲聊走快路径，只有回忆/事实/隐含指代才检索。</td><td>讲短消息意图继承和歧义 LLM fallback。</td></tr>
+<tr><td>32K 是怎么精确算出来的？</td><td>发请求前不是精确计算，而是保守估算；真正 usage 由 provider 返回并记录，soft/hard 留缓冲。</td><td>承认经验公式不是 tokenizer。</td></tr>
+<tr><td>5 个 worker 会不会让 LLM 乱序？</td><td>Map 结果按 chunk_index 写入数组/checkpoint，完成顺序不影响最终按时间排序的 Reduce；写入前检查缺失和失败。</td><td>讲 source/chunk 双指纹。</td></tr>
+<tr><td>进程被杀怎么续跑？</td><td>每个成功 Chunk 的结果已持久化，重启后按 source_fingerprint + chunk_fingerprint 复用成功结果，只补缺失/失败 chunk。</td><td>讲 partial 状态与最多 5 个上下文补救重试。</td></tr>
+<tr><td>你的锁是真正分布式锁吗？</td><td>当前折叠锁是单进程 per-Friend mutex，不是分布式锁；Reflection 抢占用了条件 UPDATE/CAS，扩展部署还需要 DB 锁和任务队列。</td><td>绝不把单进程假设包装成多实例能力。</td></tr>
+<tr><td>如何证明检索质量？</td><td>当前证明了中文检索、索引重建、隔离和 2.3 万条全量处理的工程正确性；还没有人工标注评测集，不编造准确率。</td><td>提出 Recall@K、MRR/NDCG、grounded answer rate 评测计划。</td></tr>
+<tr><td>这个项目最值得留下的设计是什么？</td><td>“权威源 + 可重建投影 + 证据追溯 + 读取时预算”这套边界，比某个具体向量库更重要。</td><td>讲换成 PostgreSQL/pgvector 仍可保留上层接口。</td></tr>
+</tbody></table></div>
+<h3>H4. 四种典型场景怎么答，避免把所有问题讲成一条链</h3>
+<h4>场景 A：用户问“我喜欢吃什么？”</h4>
+<p>先走 Supervisor 的 memory 路径。Memory Agent 识别 <code>target_subject=user</code>、<code>category_hint=preference</code>，优先检索当前 Semantic Memory；若事实可信度不足，再补原文证据。上下文权重 semantic 最高，raw evidence 只作为支撑，不需要把整个微信历史拿出来。</p>
+<h4>场景 B：用户问“我们第一次见面是哪天？”</h4>
+<p>这是 recall/early/specific-time 问题。先用时间信号锁定最早的 TimeChunk 或导入消息范围，再做 FTS5 和向量召回，命中消息扩展上下文；如果有关系阶段概览，就把它作为定位信息而不是最终证据。最终回答必须区分“原文明确写了”和“只能推断到某个时间段”。</p>
+<h4>场景 C：用户问“我口味怎么变化的？”</h4>
+<p>先命中 <code>needs_state_trajectory</code>，从命中的 current fact 得到 <code>trajectory_key</code>，再把同 key 的 historical/current facts 按 <code>valid_from</code> 排序。上下文优先 trajectory、collapse 和原文，而不是只返回当前“能吃辣”。这体现记忆不是 KV 覆盖，而是带时间状态的事件演化。</p>
+<h4>场景 D：用户只是说“哈哈”</h4>
+<p>它本身没有足够意图。若上一轮是 recall/memory/emotional，可以继承该意图；若上一轮是普通 chat，就走 chat 快路径；如果包含“还有呢”“你去翻翻”这类指代线索，交给 LLM 分类。这样既减少每轮分类成本，也避免把一个笑声误当成回忆请求。</p>
+<h3>H5. 面试时主动说出的“边界和下一步”</h3>
+<p>这些不是自我拆台，而是把当前实现和未来架构分清楚：</p>
+<ul>
+<li><b>当前是单机个人数据模型</b>：SQLite 和本地 LanceDB 是有意选择，扩展到多租户后迁移 PostgreSQL/pgvector 或独立向量服务。</li>
+<li><b>当前折叠互斥是单进程保证</b>：多 worker 需要把进程锁改成数据库级 claim/lease 或任务队列；Reflection 已经有条件 UPDATE 的 CAS 抢占思路。</li>
+<li><b>当前混合分数不是统一概率</b>：如果要提升排序稳定性，下一步做分桶评测、来源分数校准或 Reciprocal Rank Fusion，而不是凭感觉调常数。</li>
+<li><b>当前有工程回归测试，但缺黄金评测集</b>：下一步给回忆问题标注正确证据，测召回、重排和 grounded answer。</li>
+<li><b>当前 LLM 兜底以可用性为先</b>：压缩失败硬截断、重排失败沿用原序；生产版还可以增加结构化输出 schema、模型超时预算、重试退避和成本熔断。</li>
+</ul>
+<h3>H6. 绝对不要这样说</h3>
+<div class="table-scroll"><table>
+<thead><tr><th>不推荐说法</th><th>更准确的说法</th></tr></thead>
+<tbody>
+<tr><td>“向量数据库就是我的记忆库”</td><td>“向量库是 SQLite 权威记忆的可重建召回投影。”</td></tr>
+<tr><td>“SQLite 有行锁，所以并发没问题”</td><td>“当前用事务、代际号和单进程锁覆盖部署模型；SQLite 不是高并发多实例数据库。”</td></tr>
+<tr><td>“FTS5 自带中文分词”</td><td>“FTS5 提供全文索引，但中文词边界由 jieba 预分词解决。”</td></tr>
+<tr><td>“32K 是精确 token 数”</td><td>“32K 是保守预算；实际 usage 由 provider 返回用于校准。”</td></tr>
+<tr><td>“LLM 自动学会了女友人格”</td><td>“从角色本人消息统计和样例编译 Style Profile，再作为稳定前缀注入。”</td></tr>
+<tr><td>“检索准确率是 95%”</td><td>“做了 2.3 万条全量工程验证；人工标注 Recall@K 评测集还在补。”</td></tr>
+<tr><td>“用了多 Agent 所以更智能”</td><td>“节点职责分离，条件边让快路径和记忆路径的成本/失败边界可控。”</td></tr>
+</tbody></table></div>
+<h3>H7. 最后用这套口诀自检</h3>
+<p>回答任何组件问题，都按五句话走：</p>
+<ol>
+<li><b>它解决哪个具体问题？</b></li>
+<li><b>它的底层机制是什么？</b></li>
+<li><b>它在我项目中的输入、输出和权威边界是什么？</b></li>
+<li><b>失败、过期、并发或权限出问题怎么办？</b></li>
+<li><b>为什么当前规模选它，规模上来怎么换？</b></li>
+</ol>
+<p>例如面试官问 LanceDB，不要只说“向量搜索很快”；要说“它把文本变成 1024 维向量，用距离找语义相近候选，metadata 回查 SQLite，建表失败保留旧投影，当前单机规模用它避免部署向量服务，未来可替换 pgvector”。这就从名词回答升级成了工程回答。</p>
+</section>
+</main>
+
+<footer class="footer-note">
+  <div class="wrap">DeepEcho（千寻）项目全解与面试指南 · 源文档：docs/2026-08-15-project-introduction-and-interview-guide.md</div>
+</footer>
+
+<script type="module">
+// 本地打开时用 CDN 加载 mermaid 渲染架构图；无网络时静默保留源码文本。
+// 主题变化（系统切换或手动 data-theme 切换）时自动重新渲染。
+const MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+
+function currentDark() {
+  const dt = document.documentElement.getAttribute("data-theme");
+  if (dt === "dark") return true;
+  if (dt === "light") return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function themeVars(dark) {
+  const base = {
+    fontFamily: "-apple-system,'PingFang SC','Hiragino Sans GB','Noto Sans CJK SC','Microsoft YaHei',sans-serif",
+  };
+  return dark ? Object.assign(base, {
+    primaryColor: "#1A2233", primaryTextColor: "#E7EAF2", primaryBorderColor: "#2C364C",
+    lineColor: "#E0B468", textColor: "#E7EAF2",
+  }) : Object.assign(base, {
+    primaryColor: "#FFFFFF", primaryTextColor: "#1D2433", primaryBorderColor: "#E3DCCB",
+    lineColor: "#9A6C1F", textColor: "#1D2433",
+  });
+}
+
+let mermaidApi = null;
+let rendering = false;
+
+async function renderAll() {
+  if (rendering) return;
+  rendering = true;
+  try {
+    const nodes = document.querySelectorAll("pre.mermaid");
+    if (!nodes.length) return;
+    if (!mermaidApi) mermaidApi = (await import(MERMAID_URL)).default;
+    // 恢复源码文本（<br/> 已按实体写入），允许主题切换后重渲染
+    nodes.forEach(function (n) { n.innerHTML = n.textContent; });
+    mermaidApi.initialize({ startOnLoad: false, theme: "base", themeVariables: themeVars(currentDark()) });
+    await mermaidApi.run({ nodes: nodes });
+  } catch (e) {
+    // 加载失败或无网络：保留 mermaid 源码文本，不影响阅读
+  } finally {
+    rendering = false;
+  }
+}
+
+renderAll();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderAll);
+new MutationObserver(renderAll).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>
+</body>
+</html>

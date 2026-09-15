@@ -1,0 +1,468 @@
+<!doctype html>
+<!--
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  Guide HTML 模板（自包含，双击可打开）                              │
+  │                                                                    │
+  │  用法：                                                             │
+  │   1. 复制本文件为 <项目名>-guide.html                               │
+  │   2. 只改三处：<title>、header.site 里的标题/副标题、main 里的内容  │
+  │   3. <style> 与 <script> 原样保留，不要动                           │
+  │                                                                    │
+  │  内容填充约定（AI 生成时同样遵守）：                                │
+  │   - 每个板块一个 <section id="...">，id 对应导航链接                 │
+  │   - Q&A 用 <ol class="qa">，编号由 CSS 自动生成，只管写 <li>         │
+  │   - 表格包在 <div class="table-scroll"> 里，页面永不横向滚动        │
+  │   - 架构图用 <pre class="mermaid"> 写 mermaid 源码；                │
+  │     图内换行必须写成 &lt;br/&gt;（脚本会先还原文本再渲染）           │
+  │   - 主题三态自动适配系统深浅色；如需手动切换，给 <html>             │
+  │     设置 data-theme="light|dark" 即可（脚本监听变化自动重绘）        │
+  └────────────────────────────────────────────────────────────────────┘
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目名 项目全解</title>
+<style>
+/* ══ 设计系统 ══════════════════════════════════════════════════════ */
+:root {
+  --bg: #F6F2E9;
+  --surface: #FFFFFF;
+  --ink: #1D2433;
+  --ink-soft: #5B6579;
+  --ink-faint: #8A92A5;
+  --accent: #9A6C1F;
+  --accent-soft: rgba(154, 108, 31, 0.10);
+  --line: #E3DCCB;
+  --danger: #B4543E;
+  --danger-soft: rgba(180, 84, 62, 0.09);
+  --code-bg: #151B28;
+  --code-ink: #DCE2EE;
+  --chip-bg: #ECE6D6;
+  --quote-line: #C9933C;
+  --serif-display: "Songti SC", "Noto Serif CJK SC", "STSong", serif;
+  --sans: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+/* 深色：跟随系统，但显式 data-theme="light" 优先 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121826;
+    --surface: #1A2233;
+    --ink: #E7EAF2;
+    --ink-soft: #A7B0C4;
+    --ink-faint: #6E7890;
+    --accent: #E0B468;
+    --accent-soft: rgba(224, 180, 104, 0.12);
+    --line: #2C364C;
+    --danger: #E08A6E;
+    --danger-soft: rgba(224, 138, 110, 0.10);
+    --code-bg: #0E1420;
+    --code-ink: #CBD4E6;
+    --chip-bg: #232D42;
+    --quote-line: #D9A84F;
+  }
+}
+/* 深色：显式 data-theme="dark" 也生效 */
+:root[data-theme="dark"] {
+  --bg: #121826;
+  --surface: #1A2233;
+  --ink: #E7EAF2;
+  --ink-soft: #A7B0C4;
+  --ink-faint: #6E7890;
+  --accent: #E0B468;
+  --accent-soft: rgba(224, 180, 104, 0.12);
+  --line: #2C364C;
+  --danger: #E08A6E;
+  --danger-soft: rgba(224, 138, 110, 0.10);
+  --code-bg: #0E1420;
+  --code-ink: #CBD4E6;
+  --chip-bg: #232D42;
+  --quote-line: #D9A84F;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.75;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 900px; margin: 0 auto; padding: 0 28px; }
+
+/* ── header ── */
+header.site {
+  padding: 56px 0 36px;
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.brand .dot { color: var(--accent); font-weight: 700; }
+h1 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-wrap: balance;
+}
+header.site .sub {
+  margin: 10px 0 0;
+  color: var(--ink-soft);
+  font-size: 15px;
+}
+.eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 10px;
+}
+.reading-tip {
+  margin: 22px 0 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.reading-tip span {
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: var(--chip-bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 14px;
+}
+
+/* ── sticky nav ── */
+nav.toc {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+nav.toc .wrap {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  scrollbar-width: none;
+}
+nav.toc::-webkit-scrollbar { display: none; }
+nav.toc a {
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--ink-soft);
+  text-decoration: none;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+nav.toc a:hover { color: var(--accent); border-color: var(--line); }
+
+/* ── sections ── */
+section { padding: 44px 0; border-bottom: 1px solid var(--line); }
+section:last-of-type { border-bottom: none; }
+h2 {
+  margin: 0 0 6px;
+  font-size: 23px;
+  font-weight: 700;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  text-wrap: balance;
+  scroll-margin-top: 64px;
+}
+h2 .no {
+  font-family: var(--serif-display);
+  font-weight: 600;
+  font-size: 17px;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+h3 {
+  margin: 34px 0 10px;
+  font-size: 17px;
+  font-weight: 700;
+  scroll-margin-top: 64px;
+}
+p { margin: 10px 0; }
+.lead { font-size: 16.5px; color: var(--ink); }
+.soft { color: var(--ink-soft); }
+a { color: var(--accent); }
+
+/* quote / 背诵卡 */
+blockquote {
+  margin: 18px 0;
+  padding: 16px 20px;
+  background: var(--accent-soft);
+  border-left: 3px solid var(--quote-line);
+  border-radius: 0 8px 8px 0;
+}
+blockquote p { margin: 8px 0; }
+blockquote .tag {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+}
+
+/* tables */
+.table-scroll { overflow-x: auto; margin: 16px 0; border-radius: 8px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14.5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+th, td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+th {
+  background: var(--chip-bg);
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+tr:last-child td { border-bottom: none; }
+td code { background: none; padding: 0; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* code */
+pre {
+  margin: 16px 0;
+  padding: 16px 18px;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: var(--chip-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  word-break: break-word;
+}
+pre code { background: none; padding: 0; }
+
+/* key point chips in C-sections */
+.point-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 16px 0; }
+.point-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 14.5px;
+}
+.point-card b { color: var(--accent); display: block; margin-bottom: 4px; font-size: 13.5px; letter-spacing: 0.04em; }
+
+/* Q&A（编号自动生成：只管写 <li>，Q1/Q2/... 由 CSS 计数器输出） */
+ol.qa { list-style: none; counter-reset: qa; margin: 0; padding: 0; }
+ol.qa > li {
+  counter-increment: qa;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin: 12px 0;
+}
+ol.qa > li > .q::before { counter-increment: qa; content: "Q" counter(qa); }
+ol.qa .q {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+ol.qa .q::before {
+  font-family: var(--serif-display);
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 8px;
+}
+ol.qa .a { color: var(--ink-soft); font-size: 14.5px; }
+ol.qa .a b { color: var(--ink); }
+
+/* weak points table */
+table.weak td:first-child { font-weight: 600; }
+.weak-attack { color: var(--danger); }
+
+/* mermaid 图容器 */
+pre.mermaid {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  text-align: center;
+  padding: 20px 12px;
+}
+
+/* flow text chain */
+.chain { font-size: 14px; color: var(--ink-soft); }
+.chain .arrow { color: var(--accent); }
+
+.footer-note {
+  padding: 26px 0 60px;
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+@media (max-width: 640px) {
+  body { font-size: 15px; }
+  h1 { font-size: 24px; }
+  h2 { font-size: 20px; }
+  .wrap { padding: 0 18px; }
+}
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <p class="eyebrow">项目名 · 英文名</p>
+    <div class="brand"><h1>项目名 项目全解</h1></div>
+    <p class="sub">一句话副标题：项目是做什么的、这份文档能让你获得什么。</p>
+    <div class="reading-tip">
+      <span>① 第一遍：先看 A + B 部分（约 20 分钟看懂项目）</span>
+      <span>② 第二遍：C 部分设计要点</span>
+      <span>③ 面试前：D 部分 Q&amp;A 全部过一遍</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <!-- TODO: 每个 section 一个链接，锚点对应 <section id> -->
+    <a href="#overview">A 项目速览</a>
+    <a href="#how-it-runs">B 如何运转</a>
+    <a href="#design">C 设计要点</a>
+    <a href="#interview">D 面试 Q&amp;A</a>
+    <a href="#weak">E 弱点防御</a>
+    <a href="#resume">F 简历模板</a>
+  </div>
+</nav>
+
+<main class="wrap">
+
+  <!-- ══ 示例板块（内容全部替换） ══════════════════════════════ -->
+  <section id="overview">
+    <h2><span class="no">A</span>项目速览</h2>
+    <p class="lead">用 3~5 句话说明项目核心：解决什么问题、用什么技术、规模多大。</p>
+
+    <blockquote>
+      <span class="tag">30 秒版</span>
+      <p>面试时第一句话怎么说：本项目是……它解决了……我负责了……</p>
+    </blockquote>
+
+    <!-- 架构图示例：换行必须写 &lt;br/&gt; -->
+    <pre class="mermaid">
+flowchart LR
+    U["用户"] --> API["API 服务"]
+    API --> LLM["大模型"]
+    API --> DB[("数据库")]
+    </pre>
+  </section>
+
+  <section id="design">
+    <h2><span class="no">C</span>设计要点</h2>
+    <div class="point-grid">
+      <div class="point-card"><b>要点一</b>一句话设计说明</div>
+      <div class="point-card"><b>要点二</b>一句话设计说明</div>
+    </div>
+  </section>
+
+  <section id="interview">
+    <h2><span class="no">D</span>面试官 Q&amp;A</h2>
+    <ol class="qa">
+      <li>
+        <p class="q">这个项目解决什么问题？</p>
+        <p class="a">标准答法：……</p>
+      </li>
+      <li>
+        <p class="q">最难的点是什么？</p>
+        <p class="a">标准答法：……</p>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ══ 表格示例 ══════════════════════════════════════════════ -->
+  <section id="weak">
+    <h2><span class="no">E</span>弱点防御</h2>
+    <div class="table-scroll">
+      <table class="weak">
+        <tr><th>可能的质疑</th><th>应对话术</th></tr>
+        <tr><td>示例：性能瓶颈</td><td>示例：已用 xxx 方案，代价是……</td></tr>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer-note">
+  <div class="wrap">项目名讲解与面试指南 · 源文档：docs/xxx.md</div>
+</footer>
+
+<script type="module">
+// 本地打开时用 CDN 加载 mermaid 渲染架构图；无网络时静默保留源码文本。
+// 主题变化（系统切换或手动 data-theme 切换）时自动重新渲染。
+const MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+
+function currentDark() {
+  const dt = document.documentElement.getAttribute("data-theme");
+  if (dt === "dark") return true;
+  if (dt === "light") return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function themeVars(dark) {
+  const base = {
+    fontFamily: "-apple-system,'PingFang SC','Hiragino Sans GB','Noto Sans CJK SC','Microsoft YaHei',sans-serif",
+  };
+  return dark ? Object.assign(base, {
+    primaryColor: "#1A2233", primaryTextColor: "#E7EAF2", primaryBorderColor: "#2C364C",
+    lineColor: "#E0B468", textColor: "#E7EAF2",
+  }) : Object.assign(base, {
+    primaryColor: "#FFFFFF", primaryTextColor: "#1D2433", primaryBorderColor: "#E3DCCB",
+    lineColor: "#9A6C1F", textColor: "#1D2433",
+  });
+}
+
+let mermaidApi = null;
+let rendering = false;
+
+async function renderAll() {
+  if (rendering) return;
+  rendering = true;
+  try {
+    const nodes = document.querySelectorAll("pre.mermaid");
+    if (!nodes.length) return;
+    if (!mermaidApi) mermaidApi = (await import(MERMAID_URL)).default;
+    // 恢复源码文本（<br/> 已按实体写入），允许主题切换后重渲染
+    nodes.forEach(function (n) { n.innerHTML = n.textContent; });
+    mermaidApi.initialize({ startOnLoad: false, theme: "base", themeVariables: themeVars(currentDark()) });
+    await mermaidApi.run({ nodes: nodes });
+  } catch (e) {
+    // 加载失败或无网络：保留 mermaid 源码文本，不影响阅读
+  } finally {
+    rendering = false;
+  }
+}
+
+renderAll();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderAll);
+new MutationObserver(renderAll).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>
+</body>
+</html>
