@@ -76,7 +76,7 @@ Semantic Memory 不只是文本，还包含：
 - `is_mutable / is_locked`：控制自动更新能否改写核心事实
 - `MemoryEvidence`：关联原始消息索引或 Online Message ID
 
-**时间锚定守卫**：写入端提示词要求把“本周 / 当天 / 最近”等相对时间锚定为绝对日期；读取端（`ai/memory/time_anchor.py`）对历史遗留的未锚定相对时间自动降权并标注“（时间不确定，可能已过期）”，防止把过期的“本周”当成当下的“本周”呈现。
+**时间锚定守卫**：写入端提示词要求把“本周 / 当天 / 最近”等相对时间锚定为绝对日期；读取端（`ai/time/time_anchor.py`）对历史遗留的未锚定相对时间自动降权并标注“（时间不确定，可能已过期）”，防止把过期的“本周”当成当下的“本周”呈现。
 
 SQLite 是结构化事实的真源，LanceDB 只负责检索投影。重建索引时使用临时表校验、表名切换和旧表清理，避免 append 导致重复向量、过期向量长期堆积。
 
@@ -246,20 +246,20 @@ Conversation Agent 输出 `{"bubbles": [...]}`，前端按数组逐条渲染。�
 ```text
 zhaojingying-cc/
 ├── main.py                    FastAPI 入口、CORS、Admin、媒体与 SPA
+├── config/                    Django / SQLite / JWT / Media 配置
 ├── api/                       鉴权、角色、聊天、图片、记忆、导入、语音 API
+├── storage/                   Django Models、Admin、Migrations、管理命令
 ├── ai/
 │   ├── agents/                Supervisor / Memory / Emotion / Conversation
-│   ├── chat/                  结构化气泡解析与兜底
+│   ├── ingestion/             微信导入链路：解析、Chunk / Map / Reduce / Style / Writer
 │   ├── memory/                语义记忆、统一历史检索、摘要、Reflection
-│   ├── preprocessing/         Chunk / Map / Reduce / Style / Writer Pipeline
 │   ├── rag/                   Query Rewrite / Retriever / Reranker / Compressor
-│   └── tools/                 当前时间等内部上下文工具
-├── web/                       Django Models、Admin、Migrations、管理命令
+│   ├── time/                  时间上下文、聊天日边界、相对时间锚定
+│   └── vector_store.py        LanceDB 存储路径与距离换算
 ├── frontend/                  Vue 3 响应式前端
-├── tools/                     微信解析和隐私脱敏工具
-├── tests/                     Agent、Memory、RAG、预处理、图片上传测试
+├── tools/                     隐私脱敏工具
+├── tests/                     Agent、Memory、RAG、导入、图片上传测试
 ├── docs/                      架构路线图和产品设计文档
-├── django_settings.py         Django / SQLite / JWT / Media 配置
 ├── pyproject.toml             Python 依赖与测试配置
 └── .env.example               环境变量模板
 ```
