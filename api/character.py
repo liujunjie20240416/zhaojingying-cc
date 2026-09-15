@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, Form, Query, UploadFile
 import lancedb
 from django.db import connection
 from django.utils.timezone import now as djnow
-from pathlib import Path
 
 from api.deps import get_current_user
 from api.errors import ApiError
@@ -11,9 +10,9 @@ from ai.memory.import_access import set_imported_context_visibility
 from storage.models.character import Character, Voice
 from storage.utils.photo import remove_old_photo
 from storage.utils.user_profile import get_or_create_user_profile
+from ai.vector_store import STORAGE_DIR as _STORAGE_DIR
 
 router = APIRouter()
-_STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "ai" / "documents" / "lancedb_storage")
 
 
 def _remove_import_artifacts(character_id: int):

@@ -1,7 +1,6 @@
 # ai/rag/retriever.py
 import os
 import re
-from pathlib import Path
 
 import lancedb
 from django.db import connection
@@ -10,11 +9,9 @@ from langchain_community.vectorstores import LanceDB
 from ai.custom_embeddings import CustomEmbeddings
 from ai.import_storage import imported_fts_table_name, imported_vector_table_name
 from ai.rag.query_rewriter import QueryRewriter
-from ai.rag.scoring import lance_distance_to_relevance
+from ai.vector_store import STORAGE_DIR as _STORAGE_DIR, lance_distance_to_relevance
 from ai.rag.hyde import HyDEGenerator
 from storage.models.character import Character
-
-_STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "documents" / "lancedb_storage")
 
 
 class HybridRetriever:

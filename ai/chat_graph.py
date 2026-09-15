@@ -14,14 +14,11 @@ from langgraph.constants import START, END
 from langgraph.graph import add_messages, StateGraph
 from langgraph.prebuilt import ToolNode
 
-from pathlib import Path as _Path
-
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 from ai.custom_embeddings import CustomEmbeddings
 from ai.import_storage import imported_fts_table_name, imported_vector_table_name
+from ai.vector_store import STORAGE_DIR as _STORAGE_DIR
 from storage.models.character import Character
-
-_STORAGE_DIR = str(_Path(__file__).resolve().parent / "documents" / "lancedb_storage")
 
 
 class ChatGraph:

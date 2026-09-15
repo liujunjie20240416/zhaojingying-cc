@@ -2,7 +2,6 @@
 import json
 import logging
 import os
-from pathlib import Path
 import re
 import uuid
 
@@ -12,11 +11,10 @@ from langchain_community.vectorstores import LanceDB
 
 from ai.custom_embeddings import CustomEmbeddings
 from ai.time.time_anchor import find_unanchored_relative_time
-from ai.rag.scoring import lance_distance_to_relevance
+from ai.vector_store import STORAGE_DIR as _STORAGE_DIR, lance_distance_to_relevance
 from storage.models.friend import Friend
 from storage.models.memory import MemoryEvidence, SemanticMemory
 
-_STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "documents" / "lancedb_storage")
 logger = logging.getLogger(__name__)
 
 

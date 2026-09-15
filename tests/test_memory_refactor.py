@@ -57,7 +57,7 @@ def test_analysis_chunks_cover_every_message():
 
 
 def test_lance_distance_is_normalized_to_higher_relevance():
-    from ai.rag.scoring import lance_distance_to_relevance
+    from ai.vector_store import lance_distance_to_relevance
 
     assert lance_distance_to_relevance(0.1) > lance_distance_to_relevance(0.9)
     assert lance_distance_to_relevance(0) == 1.0

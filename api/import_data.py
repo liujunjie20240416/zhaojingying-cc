@@ -25,16 +25,12 @@ from storage.models.character import Character
 from storage.models.chat_message import ChatMessage
 from storage.models.import_analysis import ImportAnalysis
 from ai.ingestion.wechat_parser import parse_wechat_txt, format_output_as_chunks
+from ai.vector_store import STORAGE_DIR as _STORAGE_DIR
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _active_preprocessing: set[int] = set()
 _active_preprocessing_lock = threading.Lock()
-
-# LanceDB 存储目录
-_STORAGE_DIR = str(
-    Path(__file__).resolve().parent.parent / "ai" / "documents" / "lancedb_storage"
-)
 
 
 def _table_names(db) -> set[str]:

@@ -3,7 +3,6 @@
 import logging
 import re
 import uuid
-from pathlib import Path
 
 import jieba
 import lancedb
@@ -13,12 +12,11 @@ from langchain_community.vectorstores import LanceDB
 
 from ai.custom_embeddings import CustomEmbeddings
 from ai.rag.retriever import HybridRetriever
-from ai.rag.scoring import lance_distance_to_relevance
+from ai.vector_store import STORAGE_DIR as _STORAGE_DIR, lance_distance_to_relevance
 from storage.models.chat_message import ChatMessage
 from storage.models.friend import Message
 
 logger = logging.getLogger(__name__)
-_STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "documents" / "lancedb_storage")
 _ONLINE_TABLE_PREFIX = "online_"
 _QUERY_STOP_WORDS = {
     "记得", "以前", "时候", "什么", "怎么", "我们", "那个", "事情",
