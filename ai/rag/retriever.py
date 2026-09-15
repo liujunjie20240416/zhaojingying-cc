@@ -8,9 +8,11 @@ from django.db import connection
 from langchain_community.vectorstores import LanceDB
 
 from ai.custom_embeddings import CustomEmbeddings
+from ai.import_storage import imported_fts_table_name, imported_vector_table_name
 from ai.rag.query_rewriter import QueryRewriter
 from ai.rag.scoring import lance_distance_to_relevance
 from ai.rag.hyde import HyDEGenerator
+from web.models.character import Character
 
 _STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "documents" / "lancedb_storage")
 
@@ -23,9 +25,17 @@ class HybridRetriever:
         self.hyde = HyDEGenerator(api_key, api_base)
         self.embeddings = CustomEmbeddings()
 
+    @staticmethod
+    def _active_import_version(character_id: int) -> str:
+        return Character.objects.filter(id=character_id).values_list(
+            "import_data_version", flat=True
+        ).first() or ""
+
     def fts5_search(self, query: str, character_id: int, limit: int = 10) -> list[dict]:
         """SQLite FTS5 关键词搜索，返回 [{"content": ..., "source": "fts5", "rowid": ...}]"""
-        fts_table = f"chat_fts_{character_id}"
+        fts_table = imported_fts_table_name(
+            character_id, self._active_import_version(character_id)
+        )
         results: list[dict] = []
 
         import jieba
@@ -88,8 +98,10 @@ class HybridRetriever:
 
     def lancedb_search(self, query: str, character_id: int, k: int = 10) -> list[dict]:
         """LanceDB 语义搜索"""
-        table_name = f"wechat_{character_id}"
         try:
+            table_name = imported_vector_table_name(
+                character_id, self._active_import_version(character_id)
+            )
             db = lancedb.connect(_STORAGE_DIR)
             if table_name not in db.list_tables():
                 return []

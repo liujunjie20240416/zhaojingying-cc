@@ -43,6 +43,9 @@ class Character(models.Model):
     )
     background_image = models.ImageField(upload_to=background_image_upload_to)
     chat_sender_name = models.CharField(max_length=50, default="", blank=True, help_text="聊天记录中此角色对应的发送人名字（如大白鹅）")
+    # The active Imported Chat publication.  Empty values retain the legacy
+    # index names for existing installations until their next import.
+    import_data_version = models.CharField(max_length=32, default="", blank=True)
     create_time = models.DateTimeField(default=now)
     update_time = models.DateTimeField(default=now)
     def __str__(self):

@@ -6,7 +6,9 @@ chat_message 是权威源，重建过程无 API 调用，本地 SQLite 操作。
 from django.core.management.base import BaseCommand, CommandError
 
 from api.import_data import _sync_fts5_table
+from ai.import_storage import imported_fts_table_name
 from web.models.chat_message import ChatMessage
+from web.models.character import Character
 
 
 class Command(BaseCommand):
@@ -20,7 +22,13 @@ class Command(BaseCommand):
         count = ChatMessage.objects.filter(character_id=character_id).count()
         if count == 0:
             raise CommandError(f"character_id={character_id} 没有 chat_message 数据")
-        table_name = _sync_fts5_table(character_id)
+        version = Character.objects.filter(id=character_id).values_list(
+            "import_data_version", flat=True
+        ).first() or ""
+        table_name = _sync_fts5_table(
+            character_id,
+            table_name=imported_fts_table_name(character_id, version),
+        )
         self.stdout.write(
             self.style.SUCCESS(f"已重建 {table_name}（{count} 条消息，jieba 分词已写入 tokens 列）")
         )

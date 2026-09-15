@@ -18,6 +18,8 @@ from pathlib import Path as _Path
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 from ai.custom_embeddings import CustomEmbeddings
+from ai.import_storage import imported_fts_table_name, imported_vector_table_name
+from web.models.character import Character
 
 _STORAGE_DIR = str(_Path(__file__).resolve().parent / "documents" / "lancedb_storage")
 
@@ -77,8 +79,11 @@ class ChatGraph:
             if not character_id:
                 return "暂无聊天记录数据。"
 
-            lance_table = f"wechat_{character_id}"
-            fts_table = f"chat_fts_{character_id}"
+            version = Character.objects.filter(id=character_id).values_list(
+                "import_data_version", flat=True
+            ).first() or ""
+            lance_table = imported_vector_table_name(character_id, version)
+            fts_table = imported_fts_table_name(character_id, version)
             db = lancedb.connect(_STORAGE_DIR)
 
             # 检查数据是否存在

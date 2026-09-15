@@ -17,20 +17,24 @@ _STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "ai" / "documents" /
 
 
 def _remove_import_artifacts(character_id: int):
-    fts_table = f"chat_fts_{character_id}"
     with connection.cursor() as c:
+        legacy_fts = f"chat_fts_{character_id}"
         c.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=%s",
-            [fts_table],
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND (name=%s OR name GLOB %s) "
+            "AND sql LIKE '%VIRTUAL TABLE%'",
+            [legacy_fts, f"{legacy_fts}__import_*"],
         )
-        if c.fetchone():
+        for (fts_table,) in c.fetchall():
             c.execute(f'DROP TABLE "{fts_table}"')
 
-    table_name = f"wechat_{character_id}"
     try:
         db = lancedb.connect(_STORAGE_DIR)
-        if table_name in db.table_names():
-            db.drop_table(table_name)
+        listing = db.list_tables()
+        legacy_vector = f"wechat_{character_id}"
+        for table_name in set(getattr(listing, "tables", listing)):
+            if table_name == legacy_vector or table_name.startswith(f"{legacy_vector}__import_"):
+                db.drop_table(table_name)
     except Exception:
         pass
 
