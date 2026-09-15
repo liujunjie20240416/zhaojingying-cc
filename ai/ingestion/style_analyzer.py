@@ -6,7 +6,7 @@ import statistics
 from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model
-from ai.memory.style import build_style_profile
+from ai.ingestion.style import build_style_profile
 from web.models.chat_message import ChatMessage
 from web.models.memory import SemanticMemory
 

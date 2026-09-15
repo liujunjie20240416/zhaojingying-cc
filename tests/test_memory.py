@@ -170,12 +170,12 @@ def test_source_diverse_selection_keeps_imported_and_online_evidence():
 
 class TestRelationshipOverview:
     def test_relationship_overview_fallback(self, monkeypatch):
-        from ai.preprocessing.relationship_overview import analyze_relationship_overview
+        from ai.ingestion.relationship_overview import analyze_relationship_overview
 
         def fail_analyze(*args, **kwargs):
             raise RuntimeError("api failed")
 
-        monkeypatch.setattr("ai.preprocessing.relationship_overview._do_analyze", fail_analyze)
+        monkeypatch.setattr("ai.ingestion.relationship_overview._do_analyze", fail_analyze)
         chunks = [{
             "index": 0,
             "time_start": "2024-01-01",
@@ -204,7 +204,7 @@ class TestPreprocessingChunker:
         from web.models.user import UserProfile
         from web.models.character import Character
         from web.models.chat_message import ChatMessage
-        from ai.preprocessing.chunker import chunk_messages
+        from ai.ingestion.chunker import chunk_messages
 
         user = User.objects.create_user(username="chunk-test")
         profile = UserProfile.objects.create(user=user)

@@ -14,7 +14,7 @@ class TestChunkAnalyzerPrompt:
 
     @pytest.fixture
     def source(self):
-        from ai.preprocessing.chunk_analyzer import _do_analyze
+        from ai.ingestion.chunk_analyzer import _do_analyze
         return inspect.getsource(_do_analyze)
 
     def test_identity_definition_excludes_mutable_attributes(self, source):

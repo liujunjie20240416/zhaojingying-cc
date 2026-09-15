@@ -19,7 +19,7 @@ from ai.memory.semantic import (
     rebuild_semantic_index,
     sync_friend_memory_cache,
 )
-from ai.memory.style import build_style_profile
+from ai.ingestion.style import build_style_profile
 
 
 @transaction.atomic

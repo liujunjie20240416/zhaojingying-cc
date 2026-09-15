@@ -9,7 +9,7 @@
 4. CSV 格式
 
 用法：
-    python tools/wechat_parser.py --file chat.txt --target "大白鹅" --output /tmp/out.txt
+    python -m ai.ingestion.wechat_parser --file chat.txt --target "大白鹅" --output /tmp/out.txt
 """
 
 import re

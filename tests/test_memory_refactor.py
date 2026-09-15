@@ -31,8 +31,8 @@ def test_analysis_chunks_cover_every_message():
     from web.models.user import UserProfile
     from web.models.character import Character
     from web.models.chat_message import ChatMessage
-    from ai.preprocessing.chunker import chunk_messages
-    from ai.preprocessing.pipeline import _count_unique_messages
+    from ai.ingestion.chunker import chunk_messages
+    from ai.ingestion.pipeline import _count_unique_messages
 
     user = User.objects.create_user(username="analysis-chunks")
     profile = UserProfile.objects.create(user=user)
@@ -139,7 +139,7 @@ def test_unified_history_search_finds_online_raw_chat():
 @pytest.mark.django_db
 def test_reimport_regenerates_existing_style_profile(monkeypatch):
     from django.contrib.auth.models import User
-    from ai.preprocessing import pipeline
+    from ai.ingestion import pipeline
     from web.models.character import Character
     from web.models.user import UserProfile
 
@@ -188,7 +188,7 @@ def test_reimport_regenerates_existing_style_profile(monkeypatch):
 @pytest.mark.django_db
 def test_preprocessing_resumes_successful_map_chunks(monkeypatch):
     from django.contrib.auth.models import User
-    from ai.preprocessing import pipeline
+    from ai.ingestion import pipeline
     from web.models.character import Character
     from web.models.user import UserProfile
 
@@ -247,7 +247,7 @@ def test_preprocessing_resumes_successful_map_chunks(monkeypatch):
 
 
 def test_fragment_evidence_indices_are_validated():
-    from ai.preprocessing.chunk_analyzer import _ensure_fragments
+    from ai.ingestion.chunk_analyzer import _ensure_fragments
 
     fragments = _ensure_fragments([
         {
@@ -266,7 +266,7 @@ def test_fragment_evidence_indices_are_validated():
 def test_chunk_analyzer_prompt_requires_date_anchoring():
     """导入提取 prompt 必须要求相对日期结合消息时间戳换算为绝对日期。"""
     import inspect
-    from ai.preprocessing.chunk_analyzer import _do_analyze
+    from ai.ingestion.chunk_analyzer import _do_analyze
 
     source = inspect.getsource(_do_analyze)
     assert "日期必须锚定" in source
@@ -596,7 +596,7 @@ def test_reflection_jobs_are_unique_and_claimed_once(monkeypatch):
 
 
 def test_busy_day_uses_conditional_llm_reduce(monkeypatch):
-    from ai.preprocessing import relationship_overview as module
+    from ai.ingestion import relationship_overview as module
 
     calls = []
     monkeypatch.setattr(module, "_reduce_period_entry", lambda label, items, *args: (
@@ -908,7 +908,7 @@ def test_auto_reflection_skips_low_signal_completed_day(monkeypatch, message_cou
 def test_preprocessing_does_not_write_partial_map_results(monkeypatch):
     """One successful chunk must never make an incomplete import look done."""
     from types import SimpleNamespace
-    from ai.preprocessing import pipeline
+    from ai.ingestion import pipeline
 
     chunks = [
         {"index": 0, "messages": [{"msg_index": 0, "content": "a"}]},

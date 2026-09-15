@@ -18,11 +18,11 @@ from django.utils.timezone import now as djnow
 
 from web.models.character import Character
 from web.models.import_analysis import ImportAnalysis, PreprocessingCheckpoint
-from ai.preprocessing.chunker import chunk_messages
-from ai.preprocessing.chunk_analyzer import analyze_chunk
-from ai.preprocessing.relationship_overview import analyze_relationship_overview
-from ai.preprocessing.style_analyzer import analyze_style_profile
-from ai.preprocessing.writer import write_results
+from ai.ingestion.chunker import chunk_messages
+from ai.ingestion.chunk_analyzer import analyze_chunk
+from ai.ingestion.relationship_overview import analyze_relationship_overview
+from ai.ingestion.style_analyzer import analyze_style_profile
+from ai.ingestion.writer import write_results
 from ai.config import require_llm_config
 
 logger = logging.getLogger(__name__)

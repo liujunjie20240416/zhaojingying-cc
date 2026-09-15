@@ -24,7 +24,7 @@ from api.schemas import ResumeImportRequest
 from web.models.character import Character
 from web.models.chat_message import ChatMessage
 from web.models.import_analysis import ImportAnalysis
-from tools.wechat_parser import parse_wechat_txt, format_output_as_chunks
+from ai.ingestion.wechat_parser import parse_wechat_txt, format_output_as_chunks
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -337,7 +337,7 @@ def _start_preprocessing(character_id: int) -> bool:
 def _run_preprocessing_async(character_id: int):
     """后台线程中跑预处理，不阻塞导入响应"""
     try:
-        from ai.preprocessing.pipeline import run_preprocessing
+        from ai.ingestion.pipeline import run_preprocessing
 
         run_preprocessing(character_id)
     except Exception as exc:
