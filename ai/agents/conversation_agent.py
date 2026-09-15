@@ -9,7 +9,7 @@ from ai.config import (
     chat_api_base, chat_api_key, chat_model, require_chat_config, require_llm_config,
     vision_llm_api_base, vision_llm_api_key, vision_llm_model,
 )
-from ai.chat.bubbles import parse_bubble_response
+from ai.agents.bubbles import parse_bubble_response
 from ai.memory.context_budget import (
     assemble_memory_sections,
     context_diagnostics,

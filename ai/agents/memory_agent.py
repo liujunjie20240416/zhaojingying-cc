@@ -16,7 +16,7 @@ from ai.memory.history_search import ConversationHistorySearch
 from ai.memory.import_access import can_access_imported_context
 from ai.memory.conversation_summary import search_conversation_collapses
 from ai.memory.semantic import expand_state_trajectories, search_semantic
-from ai.memory.time_anchor import annotate_relative_time_fact, find_unanchored_relative_time
+from ai.time.time_anchor import annotate_relative_time_fact, find_unanchored_relative_time
 from ai.tracing import record_trace
 from storage.models.chat_message import ChatMessage
 from storage.models.friend import Friend, Message

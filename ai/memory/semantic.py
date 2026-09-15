@@ -11,7 +11,7 @@ from django.utils.timezone import now
 from langchain_community.vectorstores import LanceDB
 
 from ai.custom_embeddings import CustomEmbeddings
-from ai.memory.time_anchor import find_unanchored_relative_time
+from ai.time.time_anchor import find_unanchored_relative_time
 from ai.rag.scoring import lance_distance_to_relevance
 from storage.models.friend import Friend
 from storage.models.memory import MemoryEvidence, SemanticMemory

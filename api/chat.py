@@ -29,7 +29,7 @@ from ai.memory.history_search import index_online_message
 from ai.memory.conversation_summary import prepare_conversation_context
 from ai.memory.semantic import build_core_memory_context
 from ai.tracing import record_trace, serialize_messages
-from ai.tools.time_tools import format_current_time_context
+from ai.time.time_tools import format_current_time_context
 
 router = APIRouter()
 

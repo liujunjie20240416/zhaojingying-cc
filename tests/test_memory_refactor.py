@@ -6,7 +6,7 @@ from django.utils import timezone
 
 
 def test_chat_day_boundary_and_range():
-    from ai.memory.chat_day import get_chat_day, get_chat_day_range
+    from ai.time.chat_day import get_chat_day, get_chat_day_range
 
     tz = ZoneInfo("Asia/Shanghai")
     before = timezone.make_aware(datetime.datetime(2026, 7, 9, 2, 59), tz)
@@ -19,7 +19,7 @@ def test_chat_day_boundary_and_range():
 
 
 def test_detect_day_start_defaults_to_five():
-    from ai.memory.chat_day import detect_day_start_hour_from_datetimes
+    from ai.time.chat_day import detect_day_start_hour_from_datetimes
 
     values = [timezone.make_aware(datetime.datetime(2026, 7, 8, 12, 0), ZoneInfo("Asia/Shanghai"))]
     assert detect_day_start_hour_from_datetimes(values) == 5
@@ -64,7 +64,7 @@ def test_lance_distance_is_normalized_to_higher_relevance():
 
 
 def test_structured_bubbles_preserve_markdown_newlines():
-    from ai.chat.bubbles import parse_bubble_response
+    from ai.agents.bubbles import parse_bubble_response
 
     raw = '{"bubbles":["宝宝", "需要准备：\\n1. 身份证\\n2. 手机"]}'
     assert parse_bubble_response(raw) == [
@@ -74,7 +74,7 @@ def test_structured_bubbles_preserve_markdown_newlines():
 
 
 def test_plain_short_chat_lines_become_separate_bubbles():
-    from ai.chat.bubbles import parse_bubble_response
+    from ai.agents.bubbles import parse_bubble_response
 
     raw = '{"bubbles":["啧啧\\n没事找我就是想我咯\\n嘻嘻"]}'
     assert parse_bubble_response(raw) == [
@@ -85,7 +85,7 @@ def test_plain_short_chat_lines_become_separate_bubbles():
 
 
 def test_plain_short_chat_lines_ignore_blank_lines_between_bubbles():
-    from ai.chat.bubbles import parse_bubble_response
+    from ai.agents.bubbles import parse_bubble_response
 
     raw = (
         '{"bubbles":["哇哦\\n这谁呀好看是好看\\n\\n'

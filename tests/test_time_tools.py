@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 
 def test_get_current_time_formats_weekday_and_weekend():
-    from ai.tools.time_tools import get_current_time
+    from ai.time.time_tools import get_current_time
 
     result = get_current_time(
         now_dt=datetime(2026, 7, 2, 1, 30, tzinfo=timezone.utc)
@@ -16,7 +16,7 @@ def test_get_current_time_formats_weekday_and_weekend():
 
 
 def test_get_current_time_detects_solar_holiday():
-    from ai.tools.time_tools import get_current_time
+    from ai.time.time_tools import get_current_time
 
     result = get_current_time(
         now_dt=datetime(2026, 10, 1, 3, 0, tzinfo=timezone.utc)
@@ -27,7 +27,7 @@ def test_get_current_time_detects_solar_holiday():
 
 
 def test_format_current_time_context_mentions_current_time_rules():
-    from ai.tools.time_tools import format_current_time_context
+    from ai.time.time_tools import format_current_time_context
 
     text = format_current_time_context(
         {

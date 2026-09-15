@@ -29,63 +29,63 @@ def _make_friend(user, username="anchor-test"):
 
 class TestFindUnanchoredRelativeTime:
     def test_relative_week_detected(self):
-        from ai.memory.time_anchor import find_unanchored_relative_time
+        from ai.time.time_anchor import find_unanchored_relative_time
 
         assert find_unanchored_relative_time("用户本周过生日，生日当天还要上课") == "本周"
 
     def test_relative_day_detected(self):
-        from ai.memory.time_anchor import find_unanchored_relative_time
+        from ai.time.time_anchor import find_unanchored_relative_time
 
         assert find_unanchored_relative_time("大白鹅当天去做核酸") == "当天"
         assert find_unanchored_relative_time("用户今天去了医院") == "今天"
 
     def test_relative_recent_detected(self):
-        from ai.memory.time_anchor import find_unanchored_relative_time
+        from ai.time.time_anchor import find_unanchored_relative_time
 
         assert find_unanchored_relative_time("用户最近开始健身") == "最近"
 
     def test_month_day_is_anchored(self):
-        from ai.memory.time_anchor import find_unanchored_relative_time
+        from ai.time.time_anchor import find_unanchored_relative_time
 
         assert find_unanchored_relative_time("用户生日是2月3号") is None
 
     def test_full_date_is_anchored(self):
-        from ai.memory.time_anchor import find_unanchored_relative_time
+        from ai.time.time_anchor import find_unanchored_relative_time
 
         assert find_unanchored_relative_time("两人2024年2月1日聊过生日") is None
         assert find_unanchored_relative_time("2024-02-01 用户说这周过生日") is None
 
     def test_relative_word_beside_absolute_date_is_safe(self):
-        from ai.memory.time_anchor import find_unanchored_relative_time
+        from ai.time.time_anchor import find_unanchored_relative_time
 
         assert find_unanchored_relative_time("2024年2月这周过生日") is None
 
     def test_weekend_is_not_a_stale_relative_term(self):
-        from ai.memory.time_anchor import find_unanchored_relative_time
+        from ai.time.time_anchor import find_unanchored_relative_time
 
         assert find_unanchored_relative_time("两人周末经常一起做饭") is None
 
     def test_plain_day_is_not_a_relative_term(self):
-        from ai.memory.time_anchor import find_unanchored_relative_time
+        from ai.time.time_anchor import find_unanchored_relative_time
 
         assert find_unanchored_relative_time("用户喜欢白天出门") is None
 
     def test_empty_fact_has_no_relative_time(self):
-        from ai.memory.time_anchor import find_unanchored_relative_time
+        from ai.time.time_anchor import find_unanchored_relative_time
 
         assert find_unanchored_relative_time("") is None
 
 
 class TestAnnotateRelativeTimeFact:
     def test_annotation_appended_for_unanchored_fact(self):
-        from ai.memory.time_anchor import annotate_relative_time_fact
+        from ai.time.time_anchor import annotate_relative_time_fact
 
         assert annotate_relative_time_fact("用户本周过生日") == (
             "用户本周过生日（时间不确定，可能已过期）"
         )
 
     def test_annotation_skipped_for_anchored_fact(self):
-        from ai.memory.time_anchor import annotate_relative_time_fact
+        from ai.time.time_anchor import annotate_relative_time_fact
 
         assert annotate_relative_time_fact("用户生日是2月3号") == "用户生日是2月3号"
 
