@@ -2,7 +2,11 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+# 本文件在 config/ 下，仓库根目录是上两级。改错这一行不会让测试变红
+# （pytest-django 用内存库），只会让 migrate 静默在 config/ 下另建一个空库，
+# 所以这里直接断言。
+BASE_DIR = Path(__file__).resolve().parent.parent
+assert (BASE_DIR / "manage.py").exists(), f"BASE_DIR 指错了: {BASE_DIR}"
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-dev-only-change-me")
 DEBUG = True
@@ -48,7 +52,7 @@ TEMPLATES = [
     },
 ]
 
-ROOT_URLCONF = "django_admin_urls"
+ROOT_URLCONF = "config.admin_urls"
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"

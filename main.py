@@ -13,7 +13,7 @@ from ai.tracing import configure_langsmith_defaults
 configure_langsmith_defaults()
 
 # ── Django setup for ORM ──
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 import django
 
 django.setup()

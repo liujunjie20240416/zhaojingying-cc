@@ -19,7 +19,7 @@ os.environ["LANGCHAIN_TRACING_V2"] = "false"
 @pytest.fixture(scope="session", autouse=True)
 def setup_django():
     """所有测试自动配置 Django ORM（session 级，仅执行一次）"""
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_settings")
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     os.environ.setdefault("DJANGO_SECRET_KEY", "test-secret-key-for-tests")
     django.setup()
 
