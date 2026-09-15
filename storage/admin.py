@@ -1,11 +1,11 @@
 from django.contrib import admin
 
-from web.models.friend import Friend, Message, MessageAttachment, SystemPrompt
+from storage.models.friend import Friend, Message, MessageAttachment, SystemPrompt
 # Register your models here.
-from web.models.user import UserProfile
-from web.models.character import Character,Voice
-from web.models.memory import SemanticMemory
-from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
+from storage.models.user import UserProfile
+from storage.models.character import Character,Voice
+from storage.models.memory import SemanticMemory
+from storage.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):

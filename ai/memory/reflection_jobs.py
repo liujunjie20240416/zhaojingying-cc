@@ -8,8 +8,8 @@ from django.utils.timezone import now
 
 from ai.memory.chat_day import detect_day_start_hour_from_datetimes, get_chat_day
 from ai.memory.reflection import reflect_memories
-from web.models.friend import Friend, Message
-from web.models.reflection_job import ReflectionJob
+from storage.models.friend import Friend, Message
+from storage.models.reflection_job import ReflectionJob
 
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3

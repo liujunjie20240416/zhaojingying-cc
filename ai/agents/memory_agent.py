@@ -18,9 +18,9 @@ from ai.memory.conversation_summary import search_conversation_collapses
 from ai.memory.semantic import expand_state_trajectories, search_semantic
 from ai.memory.time_anchor import annotate_relative_time_fact, find_unanchored_relative_time
 from ai.tracing import record_trace
-from web.models.chat_message import ChatMessage
-from web.models.friend import Friend, Message
-from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
+from storage.models.chat_message import ChatMessage
+from storage.models.friend import Friend, Message
+from storage.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
 
 
 def _search_time_chunks(character_id: int, user_msg: str, plan: dict | None = None) -> dict | None:

@@ -7,8 +7,8 @@ from django.core.management.base import BaseCommand, CommandError
 
 from api.import_data import _sync_fts5_table
 from ai.import_storage import imported_fts_table_name
-from web.models.chat_message import ChatMessage
-from web.models.character import Character
+from storage.models.chat_message import ChatMessage
+from storage.models.character import Character
 
 
 class Command(BaseCommand):

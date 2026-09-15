@@ -2,7 +2,7 @@
 
 import django.db.models.deletion
 import django.utils.timezone
-import web.models.character
+import storage.models.character
 from django.db import migrations, models
 
 
@@ -18,9 +18,9 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('name', models.CharField(max_length=50)),
-                ('photo', models.ImageField(upload_to=web.models.character.photo_upload_to)),
+                ('photo', models.ImageField(upload_to=storage.models.character.photo_upload_to)),
                 ('profile', models.TextField(max_length=100000)),
-                ('background_image', models.ImageField(upload_to=web.models.character.background_image_upload_to)),
+                ('background_image', models.ImageField(upload_to=storage.models.character.background_image_upload_to)),
                 ('create_time', models.DateTimeField(default=django.utils.timezone.now)),
                 ('update_time', models.DateTimeField(default=django.utils.timezone.now)),
                 ('author', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='web.userprofile')),

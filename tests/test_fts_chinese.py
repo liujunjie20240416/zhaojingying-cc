@@ -10,8 +10,8 @@ import pytest
 @pytest.fixture
 def fts_character():
     from django.contrib.auth.models import User
-    from web.models.character import Character
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.user import UserProfile
 
     profile = UserProfile.objects.create(user=User.objects.create_user(username="fts-cn"))
     return Character.objects.create(
@@ -47,7 +47,7 @@ def test_ensure_fts5_table_has_tokens_column(fts_character):
 def test_sync_fts5_populates_jieba_tokens_and_matches(fts_character):
     """导入同步后 tokens 列是 jieba 分词结果，多词 AND 能精确定位"""
     from django.db import connection
-    from web.models.chat_message import ChatMessage
+    from storage.models.chat_message import ChatMessage
     from api.import_data import _sync_fts5_table
 
     ChatMessage.objects.create(
@@ -72,7 +72,7 @@ def test_sync_fts5_populates_jieba_tokens_and_matches(fts_character):
 @pytest.mark.django_db
 def test_fts5_search_recovers_birthday_conversation(fts_character):
     """端到端回归：原始 bug 场景——查'你记得我的生日吗'必须命中真实生日对话"""
-    from web.models.chat_message import ChatMessage
+    from storage.models.chat_message import ChatMessage
     from ai.rag.retriever import HybridRetriever
 
     ChatMessage.objects.create(

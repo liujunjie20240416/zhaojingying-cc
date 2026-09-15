@@ -12,7 +12,7 @@ class TestSemanticMemory:
     @pytest.mark.django_db
     def test_category_choices(self):
         """验证分类已收紧为 4 类，不包含 personality 和 other"""
-        from web.models.memory import SemanticMemory
+        from storage.models.memory import SemanticMemory
         cats = [c[0] for c in SemanticMemory.CATEGORY_CHOICES]
         assert "identity" in cats
         assert "preference" in cats
@@ -24,7 +24,7 @@ class TestSemanticMemory:
 
     @pytest.mark.django_db
     def test_subject_choices(self):
-        from web.models.memory import SemanticMemory
+        from storage.models.memory import SemanticMemory
         subjects = [s[0] for s in SemanticMemory.SUBJECT_CHOICES]
         assert subjects == ["user", "girlfriend", "relationship"]
 
@@ -39,11 +39,11 @@ class TestSemanticMemory:
     @pytest.mark.django_db
     def test_resolve_conflict_archives_old_preference(self, monkeypatch):
         from ai.memory.semantic import add_fact, resolve_conflict
-        from web.models.memory import SemanticMemory
+        from storage.models.memory import SemanticMemory
         from django.contrib.auth.models import User
-        from web.models.user import UserProfile
-        from web.models.character import Character
-        from web.models.friend import Friend
+        from storage.models.user import UserProfile
+        from storage.models.character import Character
+        from storage.models.friend import Friend
 
         monkeypatch.setattr("ai.memory.semantic._index_fact", lambda *args, **kwargs: None)
         user = User.objects.create_user(username="memory-test")
@@ -105,10 +105,10 @@ class TestMemoryIntent:
 def test_origin_question_uses_earliest_imported_chunk_and_evidence():
     from django.contrib.auth.models import User
     from ai.agents.memory_agent import _imported_anchor_evidence, _search_time_chunks
-    from web.models.character import Character
-    from web.models.chat_message import ChatMessage
-    from web.models.import_analysis import TimeChunk
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.chat_message import ChatMessage
+    from storage.models.import_analysis import TimeChunk
+    from storage.models.user import UserProfile
 
     profile = UserProfile.objects.create(user=User.objects.create_user(username="origin-evidence"))
     character = Character.objects.create(
@@ -201,9 +201,9 @@ class TestPreprocessingChunker:
     @pytest.mark.django_db
     def test_chunk_messages_keeps_msg_index(self):
         from django.contrib.auth.models import User
-        from web.models.user import UserProfile
-        from web.models.character import Character
-        from web.models.chat_message import ChatMessage
+        from storage.models.user import UserProfile
+        from storage.models.character import Character
+        from storage.models.chat_message import ChatMessage
         from ai.ingestion.chunker import chunk_messages
 
         user = User.objects.create_user(username="chunk-test")
@@ -233,9 +233,9 @@ class TestReflection:
         """没有已完成聊天日时不执行 reflection。"""
         from ai.memory.reflection import reflect_memories
         from django.contrib.auth.models import User
-        from web.models.user import UserProfile
-        from web.models.character import Character
-        from web.models.friend import Friend
+        from storage.models.user import UserProfile
+        from storage.models.character import Character
+        from storage.models.friend import Friend
 
         user = User.objects.create_user(username="reflection-empty")
         profile = UserProfile.objects.create(user=user)

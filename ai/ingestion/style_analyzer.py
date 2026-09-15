@@ -7,8 +7,8 @@ from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model
 from ai.ingestion.style import build_style_profile
-from web.models.chat_message import ChatMessage
-from web.models.memory import SemanticMemory
+from storage.models.chat_message import ChatMessage
+from storage.models.memory import SemanticMemory
 
 STYLE_FACT_SIGNALS = (
     "说话", "称呼", "语气", "口头禅", "表情", "颜文字",

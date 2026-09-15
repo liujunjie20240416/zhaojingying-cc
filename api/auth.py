@@ -8,7 +8,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from api.deps import get_current_user
 from api.errors import ApiError
 from api.schemas import LoginRequest, RegisterRequest
-from web.models.user import UserProfile
+from storage.models.user import UserProfile
 
 router = APIRouter()
 

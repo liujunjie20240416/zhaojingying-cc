@@ -21,9 +21,9 @@ from ai.import_storage import imported_fts_table_name, imported_vector_table_nam
 from api.deps import get_current_user
 from api.errors import ApiError
 from api.schemas import ResumeImportRequest
-from web.models.character import Character
-from web.models.chat_message import ChatMessage
-from web.models.import_analysis import ImportAnalysis
+from storage.models.character import Character
+from storage.models.chat_message import ChatMessage
+from storage.models.import_analysis import ImportAnalysis
 from ai.ingestion.wechat_parser import parse_wechat_txt, format_output_as_chunks
 
 router = APIRouter()

@@ -16,8 +16,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.utils.timezone import now as djnow
 
-from web.models.character import Character
-from web.models.import_analysis import ImportAnalysis, PreprocessingCheckpoint
+from storage.models.character import Character
+from storage.models.import_analysis import ImportAnalysis, PreprocessingCheckpoint
 from ai.ingestion.chunker import chunk_messages
 from ai.ingestion.chunk_analyzer import analyze_chunk
 from ai.ingestion.relationship_overview import analyze_relationship_overview

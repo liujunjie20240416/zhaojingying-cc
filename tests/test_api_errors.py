@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from rest_framework_simplejwt.tokens import AccessToken
 
 from main import app
-from web.models.character import Character
+from storage.models.character import Character
 
 
 def _auth_headers(user: User) -> dict[str, str]:

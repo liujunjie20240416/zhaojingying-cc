@@ -1,4 +1,4 @@
-from web.models.user import UserProfile
+from storage.models.user import UserProfile
 
 
 def get_or_create_user_profile(user):

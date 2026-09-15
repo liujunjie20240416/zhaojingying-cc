@@ -12,8 +12,8 @@ from django.db import connection
 
 @pytest.fixture
 def imported_character():
-    from web.models.character import Character
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.user import UserProfile
 
     user = User.objects.create_user(username="atomic-import")
     profile = UserProfile.objects.create(user=user)
@@ -32,7 +32,7 @@ def test_failed_vector_build_preserves_live_imported_chat_and_fts(
     imported_character, monkeypatch,
 ):
     from api import import_data
-    from web.models.chat_message import ChatMessage
+    from storage.models.chat_message import ChatMessage
 
     old_message = ChatMessage.objects.create(
         character=imported_character,
@@ -97,8 +97,8 @@ def test_failed_sqlite_publish_rolls_back_and_removes_unpublished_vector(
     imported_character, monkeypatch,
 ):
     from api import import_data
-    from web.models.character import Character
-    from web.models.chat_message import ChatMessage
+    from storage.models.character import Character
+    from storage.models.chat_message import ChatMessage
 
     old_message = ChatMessage.objects.create(
         character=imported_character,
@@ -189,7 +189,7 @@ def test_successful_publish_switches_all_imported_chat_read_models(
     imported_character, monkeypatch,
 ):
     from api import import_data
-    from web.models.chat_message import ChatMessage
+    from storage.models.chat_message import ChatMessage
 
     ChatMessage.objects.create(
         character=imported_character,

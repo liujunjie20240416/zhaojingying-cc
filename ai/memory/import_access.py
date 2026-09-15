@@ -1,8 +1,8 @@
 """Authorization and projection sync for Character-scoped Imported Chat."""
 
-from web.models.character import Character
-from web.models.friend import Friend
-from web.models.memory import MemoryEvidence, SemanticMemory
+from storage.models.character import Character
+from storage.models.friend import Friend
+from storage.models.memory import MemoryEvidence, SemanticMemory
 
 
 VALID_VISIBILITIES = {"private", "public"}

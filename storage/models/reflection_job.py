@@ -1,7 +1,7 @@
 from django.db import models
 from django.utils.timezone import now
 
-from web.models.friend import Friend
+from storage.models.friend import Friend
 
 
 class ReflectionJob(models.Model):

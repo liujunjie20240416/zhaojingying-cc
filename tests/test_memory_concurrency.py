@@ -7,10 +7,10 @@ from langchain_core.messages import HumanMessage
 
 from api.message import clear_history
 from api.schemas import RemoveFriendRequest
-from web.models.character import Character
-from web.models.friend import Friend, Message
-from web.models.memory import SemanticMemory
-from web.models.user import UserProfile
+from storage.models.character import Character
+from storage.models.friend import Friend, Message
+from storage.models.memory import SemanticMemory
+from storage.models.user import UserProfile
 
 
 def _make_friend(username):

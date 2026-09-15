@@ -5,7 +5,7 @@ import django.utils.timezone
 from django.conf import settings
 from django.db import migrations, models
 
-import web.models.user
+import storage.models.user
 
 
 class Migration(migrations.Migration):
@@ -21,7 +21,7 @@ class Migration(migrations.Migration):
             name='UserProfile',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('photo', models.ImageField(default='user/photos/default.jpg', upload_to=web.models.user.photo_upload_to)),
+                ('photo', models.ImageField(default='user/photos/default.jpg', upload_to=storage.models.user.photo_upload_to)),
                 ('profile', models.TextField(default='谢谢你的关注', max_length=500)),
                 ('create_time', models.DateTimeField(default=django.utils.timezone.now)),
                 ('update_time', models.DateTimeField(default=django.utils.timezone.now)),

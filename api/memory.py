@@ -9,9 +9,9 @@ from ai.memory.import_access import can_access_imported_context
 from api.deps import get_current_user
 from api.errors import ApiError
 from api.schemas import MemoryCreateRequest, MemoryUpdateRequest
-from web.models.chat_message import ChatMessage
-from web.models.friend import Friend, Message
-from web.models.memory import SemanticMemory
+from storage.models.chat_message import ChatMessage
+from storage.models.friend import Friend, Message
+from storage.models.memory import SemanticMemory
 
 router = APIRouter()
 _CATEGORIES = {"identity", "preference", "experience", "relationship"}

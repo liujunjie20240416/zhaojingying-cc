@@ -18,7 +18,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "web",
+    # 代码目录叫 storage，但 app label 仍是 "web" —— 见 storage/apps.py
+    "storage",
 ]
 
 MIDDLEWARE = [

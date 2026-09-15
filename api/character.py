@@ -8,9 +8,9 @@ from api.deps import get_current_user
 from api.errors import ApiError
 from api.schemas import RemoveCharacterRequest, UpdateImportedMemoryVisibilityRequest
 from ai.memory.import_access import set_imported_context_visibility
-from web.models.character import Character, Voice
-from web.utils.photo import remove_old_photo
-from web.utils.user_profile import get_or_create_user_profile
+from storage.models.character import Character, Voice
+from storage.utils.photo import remove_old_photo
+from storage.utils.user_profile import get_or_create_user_profile
 
 router = APIRouter()
 _STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "ai" / "documents" / "lancedb_storage")

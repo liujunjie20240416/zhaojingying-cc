@@ -3,8 +3,8 @@
 from django.db import models
 from django.utils.timezone import now, localtime
 
-from web.models.character import Character
-from web.models.user import UserProfile
+from storage.models.character import Character
+from storage.models.user import UserProfile
 
 
 class Friend(models.Model):

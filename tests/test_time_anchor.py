@@ -11,9 +11,9 @@ import pytest
 
 def _make_friend(user, username="anchor-test"):
     from django.contrib.auth.models import User
-    from web.models.user import UserProfile
-    from web.models.character import Character
-    from web.models.friend import Friend
+    from storage.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend
 
     user = User.objects.create_user(username=username)
     profile = UserProfile.objects.create(user=user)

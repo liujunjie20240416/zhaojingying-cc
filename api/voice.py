@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from ai.config import dashscope_api_key, dashscope_voice_url
 from api.deps import get_current_user
 from api.errors import ApiError
-from web.models.character import Voice
+from storage.models.character import Voice
 
 router = APIRouter()
 

@@ -4,9 +4,9 @@ from django.utils.timezone import now
 
 from api.deps import get_current_user
 from api.errors import ApiError
-from web.models.user import UserProfile
-from web.utils.photo import remove_old_photo
-from web.utils.user_profile import get_or_create_user_profile
+from storage.models.user import UserProfile
+from storage.utils.photo import remove_old_photo
+from storage.utils.user_profile import get_or_create_user_profile
 
 router = APIRouter()
 

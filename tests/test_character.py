@@ -5,7 +5,7 @@ import pytest
 from django.contrib.auth.models import User
 
 from api.character import create_character
-from web.models.character import Character, Voice
+from storage.models.character import Character, Voice
 
 
 @pytest.mark.django_db

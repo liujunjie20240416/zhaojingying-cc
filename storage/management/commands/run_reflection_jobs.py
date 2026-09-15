@@ -5,7 +5,7 @@ from ai.memory.reflection_jobs import (
     enqueue_completed_chat_days,
     process_pending_reflection_jobs,
 )
-from web.models.friend import Friend
+from storage.models.friend import Friend
 
 
 class Command(BaseCommand):

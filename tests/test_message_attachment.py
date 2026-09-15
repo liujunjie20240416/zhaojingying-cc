@@ -7,9 +7,9 @@ from PIL import Image
 from rest_framework_simplejwt.tokens import AccessToken
 
 from main import app
-from web.models.character import Character
-from web.models.friend import Friend, MessageAttachment
-from web.models.user import UserProfile
+from storage.models.character import Character
+from storage.models.friend import Friend, MessageAttachment
+from storage.models.user import UserProfile
 
 
 @pytest.mark.django_db(transaction=True)

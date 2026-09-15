@@ -14,9 +14,9 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from api.deps import get_current_user
 from api.errors import ApiError
 from api.schemas import RemoveFriendRequest
-from web.models.friend import Message, Friend, MessageAttachment
-from web.models.memory import MemoryEvidence, SemanticMemory
-from web.models.reflection_job import ReflectionJob
+from storage.models.friend import Message, Friend, MessageAttachment
+from storage.models.memory import MemoryEvidence, SemanticMemory
+from storage.models.reflection_job import ReflectionJob
 from ai.memory.history_search import drop_online_history_index
 from ai.memory.semantic import delete_semantic_index_entries
 

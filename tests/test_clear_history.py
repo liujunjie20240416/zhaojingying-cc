@@ -7,11 +7,11 @@ from fastapi.testclient import TestClient
 from rest_framework_simplejwt.tokens import AccessToken
 
 from main import app
-from web.models.character import Character
-from web.models.friend import Friend, Message, MessageAttachment
-from web.models.memory import MemoryEvidence, SemanticMemory
-from web.models.reflection_job import ReflectionJob
-from web.models.user import UserProfile
+from storage.models.character import Character
+from storage.models.friend import Friend, Message, MessageAttachment
+from storage.models.memory import MemoryEvidence, SemanticMemory
+from storage.models.reflection_job import ReflectionJob
+from storage.models.user import UserProfile
 
 
 @pytest.mark.django_db(transaction=True)

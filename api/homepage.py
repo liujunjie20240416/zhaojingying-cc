@@ -4,7 +4,7 @@ from django.db.models import Q
 
 from api.deps import get_current_user
 from api.errors import ApiError
-from web.models.character import Character, Voice
+from storage.models.character import Character, Voice
 
 router = APIRouter()
 

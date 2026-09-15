@@ -3,7 +3,7 @@ import uuid
 from django.db import models
 from django.utils.timezone import now, localtime
 
-from web.models.user import UserProfile, photo_upload_to
+from storage.models.user import UserProfile, photo_upload_to
 
 def photo_upload_to(instance, filename):
     ext = filename.split('.')[-1]

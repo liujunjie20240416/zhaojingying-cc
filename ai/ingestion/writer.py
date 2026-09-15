@@ -8,11 +8,11 @@
 import json
 
 from django.db import transaction
-from web.models.character import Character
-from web.models.chat_message import ChatMessage
-from web.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
-from web.models.friend import Friend
-from web.models.memory import SemanticMemory
+from storage.models.character import Character
+from storage.models.chat_message import ChatMessage
+from storage.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
+from storage.models.friend import Friend
+from storage.models.memory import SemanticMemory
 from ai.memory.semantic import (
     add_fact,
     add_memory_evidence,

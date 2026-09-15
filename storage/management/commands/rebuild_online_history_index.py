@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 
 from ai.memory.history_search import rebuild_online_history_index
-from web.models.friend import Friend
+from storage.models.friend import Friend
 
 
 class Command(BaseCommand):

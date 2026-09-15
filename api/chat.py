@@ -18,8 +18,8 @@ from ai.config import dashscope_api_key, dashscope_wss_url
 from api.deps import get_current_user
 from api.errors import ApiError
 from api.schemas import ChatRequest
-from web.models.character import Character
-from web.models.friend import Friend, Message, MessageAttachment, SystemPrompt
+from storage.models.character import Character
+from storage.models.friend import Friend, Message, MessageAttachment, SystemPrompt
 from ai.agents.supervisor_graph import create_supervisor_app
 from ai.memory.reflection_jobs import (
     enqueue_completed_chat_days,

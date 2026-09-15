@@ -14,10 +14,10 @@ def test_context_budget_prefers_conservative_chinese_estimate():
 def test_core_memory_context_uses_one_current_fact_per_bucket():
     from django.contrib.auth.models import User
     from ai.memory.semantic import build_core_memory_context
-    from web.models.character import Character
-    from web.models.friend import Friend
-    from web.models.memory import SemanticMemory
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend
+    from storage.models.memory import SemanticMemory
+    from storage.models.user import UserProfile
 
     profile = UserProfile.objects.create(user=User.objects.create_user(username="core-profile"))
     character = Character.objects.create(
@@ -104,10 +104,10 @@ def test_state_trajectory_keeps_every_known_phase():
     from django.contrib.auth.models import User
     from django.utils.timezone import now
     from ai.memory.semantic import expand_state_trajectories, resolve_conflict
-    from web.models.character import Character
-    from web.models.friend import Friend
-    from web.models.memory import SemanticMemory
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend
+    from storage.models.memory import SemanticMemory
+    from storage.models.user import UserProfile
 
     profile = UserProfile.objects.create(user=User.objects.create_user(username="trajectory-user"))
     character = Character.objects.create(
@@ -141,10 +141,10 @@ def test_state_trajectory_keeps_every_known_phase():
 def test_historical_collapse_is_a_projection_not_a_deletion():
     from django.contrib.auth.models import User
     from ai.memory.conversation_summary import search_conversation_collapses
-    from web.models.character import Character
-    from web.models.friend import Friend, Message
-    from web.models.memory import ConversationCollapse
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend, Message
+    from storage.models.memory import ConversationCollapse
+    from storage.models.user import UserProfile
 
     profile = UserProfile.objects.create(user=User.objects.create_user(username="collapse-user"))
     character = Character.objects.create(

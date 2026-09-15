@@ -28,9 +28,9 @@ def test_detect_day_start_defaults_to_five():
 @pytest.mark.django_db
 def test_analysis_chunks_cover_every_message():
     from django.contrib.auth.models import User
-    from web.models.user import UserProfile
-    from web.models.character import Character
-    from web.models.chat_message import ChatMessage
+    from storage.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.chat_message import ChatMessage
     from ai.ingestion.chunker import chunk_messages
     from ai.ingestion.pipeline import _count_unique_messages
 
@@ -103,9 +103,9 @@ def test_plain_short_chat_lines_ignore_blank_lines_between_bubbles():
 def test_unified_history_search_finds_online_raw_chat():
     from django.contrib.auth.models import User
     from ai.memory.history_search import ConversationHistorySearch
-    from web.models.character import Character
-    from web.models.friend import Friend, Message
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend, Message
+    from storage.models.user import UserProfile
 
     user = User.objects.create_user(username="online-history-search")
     profile = UserProfile.objects.create(user=user)
@@ -140,8 +140,8 @@ def test_unified_history_search_finds_online_raw_chat():
 def test_reimport_regenerates_existing_style_profile(monkeypatch):
     from django.contrib.auth.models import User
     from ai.ingestion import pipeline
-    from web.models.character import Character
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.user import UserProfile
 
     user = User.objects.create_user(username="style-reimport")
     profile = UserProfile.objects.create(user=user)
@@ -189,8 +189,8 @@ def test_reimport_regenerates_existing_style_profile(monkeypatch):
 def test_preprocessing_resumes_successful_map_chunks(monkeypatch):
     from django.contrib.auth.models import User
     from ai.ingestion import pipeline
-    from web.models.character import Character
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.user import UserProfile
 
     user = User.objects.create_user(username="checkpoint-resume")
     profile = UserProfile.objects.create(user=user)
@@ -278,10 +278,10 @@ def test_chunk_analyzer_prompt_requires_date_anchoring():
 def test_memory_evidence_deduplicates_message_refs():
     from django.contrib.auth.models import User
     from ai.memory.semantic import add_memory_evidence
-    from web.models.character import Character
-    from web.models.friend import Friend
-    from web.models.memory import MemoryEvidence, SemanticMemory
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend
+    from storage.models.memory import MemoryEvidence, SemanticMemory
+    from storage.models.user import UserProfile
 
     user = User.objects.create_user(username="memory-evidence")
     profile = UserProfile.objects.create(user=user)
@@ -311,10 +311,10 @@ def test_memory_evidence_deduplicates_message_refs():
 def test_failed_semantic_rebuild_keeps_previous_table(monkeypatch):
     from django.contrib.auth.models import User
     from ai.memory import semantic as module
-    from web.models.character import Character
-    from web.models.friend import Friend
-    from web.models.memory import SemanticMemory
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend
+    from storage.models.memory import SemanticMemory
+    from storage.models.user import UserProfile
 
     user = User.objects.create_user(username="semantic-rebuild")
     profile = UserProfile.objects.create(user=user)
@@ -400,9 +400,9 @@ def test_conversation_builds_one_system_message(monkeypatch):
 def test_conversation_context_keeps_small_history_without_summarizing(monkeypatch):
     from django.contrib.auth.models import User
     from ai.memory.conversation_summary import prepare_conversation_context
-    from web.models.character import Character
-    from web.models.friend import Friend, Message
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend, Message
+    from storage.models.user import UserProfile
 
     profile = UserProfile.objects.create(
         user=User.objects.create_user(username="context-small-history")
@@ -433,9 +433,9 @@ def test_conversation_context_keeps_small_history_without_summarizing(monkeypatc
 def test_conversation_context_compacts_old_turns_and_restores_latest_ten(monkeypatch):
     from django.contrib.auth.models import User
     from ai.memory.conversation_summary import prepare_conversation_context
-    from web.models.character import Character
-    from web.models.friend import Friend, Message
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend, Message
+    from storage.models.user import UserProfile
 
     profile = UserProfile.objects.create(
         user=User.objects.create_user(username="context-compaction")
@@ -483,9 +483,9 @@ def test_concurrent_fold_requester_does_not_fold_again(monkeypatch):
     """
     from django.contrib.auth.models import User
     from ai.memory.conversation_summary import prepare_conversation_context
-    from web.models.character import Character
-    from web.models.friend import Friend, Message
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend, Message
+    from storage.models.user import UserProfile
 
     profile = UserProfile.objects.create(
         user=User.objects.create_user(username="context-race")
@@ -559,10 +559,10 @@ def test_conversation_prompt_includes_older_conversation_summary(monkeypatch):
 def test_reflection_jobs_are_unique_and_claimed_once(monkeypatch):
     from django.contrib.auth.models import User
     from ai.memory import reflection_jobs as module
-    from web.models.character import Character
-    from web.models.friend import Friend
-    from web.models.reflection_job import ReflectionJob
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend
+    from storage.models.reflection_job import ReflectionJob
+    from storage.models.user import UserProfile
 
     user = User.objects.create_user(username="reflection-job")
     profile = UserProfile.objects.create(user=user)
@@ -701,9 +701,9 @@ def test_supervisor_graph_does_not_loop_for_emotional_recall(monkeypatch):
 def test_private_imported_context_is_visible_only_to_character_owner():
     from django.contrib.auth.models import User
     from ai.memory.import_access import can_access_imported_context
-    from web.models.character import Character
-    from web.models.friend import Friend
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend
+    from storage.models.user import UserProfile
 
     owner = UserProfile.objects.create(
         user=User.objects.create_user(username="private-import-owner")
@@ -735,10 +735,10 @@ def test_private_friend_history_search_receives_no_character_id(monkeypatch):
     from django.contrib.auth.models import User
     from langchain_core.messages import HumanMessage
     from ai.agents import memory_agent as module
-    from web.models.character import Character
-    from web.models.chat_message import ChatMessage
-    from web.models.friend import Friend, Message
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.chat_message import ChatMessage
+    from storage.models.friend import Friend, Message
+    from storage.models.user import UserProfile
 
     owner = UserProfile.objects.create(
         user=User.objects.create_user(username="raw-private-owner")
@@ -786,10 +786,10 @@ def test_private_friend_history_search_receives_no_character_id(monkeypatch):
 def test_private_friend_semantic_search_excludes_imported_facts():
     from django.contrib.auth.models import User
     from ai.memory.semantic import search_semantic
-    from web.models.character import Character
-    from web.models.friend import Friend
-    from web.models.memory import SemanticMemory
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend
+    from storage.models.memory import SemanticMemory
+    from storage.models.user import UserProfile
 
     profile = UserProfile.objects.create(
         user=User.objects.create_user(username="private-semantic")
@@ -820,10 +820,10 @@ def test_private_friend_semantic_search_excludes_imported_facts():
 def test_visibility_change_reconciles_imported_memory_projections(monkeypatch):
     from django.contrib.auth.models import User
     from ai.memory.import_access import set_imported_context_visibility
-    from web.models.character import Character
-    from web.models.friend import Friend
-    from web.models.memory import MemoryEvidence, SemanticMemory
-    from web.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend
+    from storage.models.memory import MemoryEvidence, SemanticMemory
+    from storage.models.user import UserProfile
 
     owner = UserProfile.objects.create(
         user=User.objects.create_user(username="visibility-owner")
@@ -875,9 +875,9 @@ def test_visibility_change_reconciles_imported_memory_projections(monkeypatch):
 @pytest.mark.parametrize("message_count,text", [(4, "长文本" * 100), (5, "短")])
 def test_auto_reflection_skips_low_signal_completed_day(monkeypatch, message_count, text):
     from django.contrib.auth.models import User
-    from web.models.user import UserProfile
-    from web.models.character import Character
-    from web.models.friend import Friend, Message
+    from storage.models.user import UserProfile
+    from storage.models.character import Character
+    from storage.models.friend import Friend, Message
     from ai.memory.reflection import reflect_memories
 
     user = User.objects.create_user(username=f"reflection-gate-{message_count}-{len(text)}")

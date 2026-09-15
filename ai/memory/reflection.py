@@ -11,8 +11,8 @@ from openai import OpenAI
 
 from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
 from ai.tracing import record_trace
-from web.models.friend import Friend, Message
-from web.models.memory import SemanticMemory
+from storage.models.friend import Friend, Message
+from storage.models.memory import SemanticMemory
 from ai.memory.chat_day import (
     detect_day_start_hour_from_datetimes,
     get_chat_day,

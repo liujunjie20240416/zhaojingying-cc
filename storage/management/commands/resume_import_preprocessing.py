@@ -1,8 +1,8 @@
 from django.core.management.base import BaseCommand, CommandError
 
 from ai.ingestion.pipeline import run_preprocessing
-from web.models.character import Character
-from web.models.chat_message import ChatMessage
+from storage.models.character import Character
+from storage.models.chat_message import ChatMessage
 
 
 class Command(BaseCommand):

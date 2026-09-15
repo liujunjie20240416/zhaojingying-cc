@@ -14,8 +14,8 @@ from langchain_community.vectorstores import LanceDB
 from ai.custom_embeddings import CustomEmbeddings
 from ai.rag.retriever import HybridRetriever
 from ai.rag.scoring import lance_distance_to_relevance
-from web.models.chat_message import ChatMessage
-from web.models.friend import Message
+from storage.models.chat_message import ChatMessage
+from storage.models.friend import Message
 
 logger = logging.getLogger(__name__)
 _STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "documents" / "lancedb_storage")

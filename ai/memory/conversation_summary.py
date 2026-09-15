@@ -19,8 +19,8 @@ from ai.memory.context_budget import (
     WORKING_HISTORY_TOKEN_BUDGET,
     estimate_tokens,
 )
-from web.models.friend import Friend, Message
-from web.models.memory import ConversationCollapse
+from storage.models.friend import Friend, Message
+from storage.models.memory import ConversationCollapse
 
 
 logger = logging.getLogger(__name__)

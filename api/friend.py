@@ -3,13 +3,13 @@ from fastapi import APIRouter, Depends, Query
 from api.deps import get_current_user
 from api.errors import ApiError
 from api.schemas import GetOrCreateFriendRequest, RemoveFriendRequest
-from web.models.character import Character
-from web.models.friend import Friend
-from web.utils.user_profile import get_or_create_user_profile
+from storage.models.character import Character
+from storage.models.friend import Friend
+from storage.utils.user_profile import get_or_create_user_profile
 from ai.memory.import_access import sync_imported_context_to_friend
 from ai.memory.context_budget import context_diagnostics
 from ai.memory.semantic import build_core_memory_context
-from web.models.friend import Message, SystemPrompt
+from storage.models.friend import Message, SystemPrompt
 
 router = APIRouter()
 

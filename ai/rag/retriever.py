@@ -12,7 +12,7 @@ from ai.import_storage import imported_fts_table_name, imported_vector_table_nam
 from ai.rag.query_rewriter import QueryRewriter
 from ai.rag.scoring import lance_distance_to_relevance
 from ai.rag.hyde import HyDEGenerator
-from web.models.character import Character
+from storage.models.character import Character
 
 _STORAGE_DIR = str(Path(__file__).resolve().parent.parent / "documents" / "lancedb_storage")
 

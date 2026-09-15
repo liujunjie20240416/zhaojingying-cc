@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 
 from ai.ingestion.style_analyzer import analyze_style_profile
-from web.models.character import Character
+from storage.models.character import Character
 
 
 class Command(BaseCommand):

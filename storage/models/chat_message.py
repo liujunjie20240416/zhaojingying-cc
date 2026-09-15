@@ -7,7 +7,7 @@
 from django.db import models
 from django.utils.timezone import now
 
-from web.models.character import Character
+from storage.models.character import Character
 
 
 class ChatMessage(models.Model):

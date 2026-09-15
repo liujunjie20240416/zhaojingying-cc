@@ -15,7 +15,7 @@ import datetime
 from collections import Counter
 from zoneinfo import ZoneInfo
 
-from web.models.chat_message import ChatMessage
+from storage.models.chat_message import ChatMessage
 
 TZ = ZoneInfo("Asia/Shanghai")
 MAX_MESSAGES_PER_ANALYSIS_CHUNK = 120
