@@ -359,6 +359,27 @@ def test_failed_semantic_rebuild_keeps_previous_table(monkeypatch):
     assert fake_db.renamed == []
 
 
+def test_recall_definition_covers_referential_followups():
+    """`recall` 的定义必须包含「没有回忆词、靠前文指代」的追问。
+
+    这条测的是**提示词文本**，不是分类行为——它不能证明模型会判对，只能证明
+    这行说明还在。之所以值得钉住：改造前这类消息由路由阶段的
+    `detect_memory_intent(...).get("needs_lightweight_recall")` 兜底（旧
+    `route_from_supervisor` 把它当 OR 条件用），改造后该信号只在 memory 节点
+    **内部**生效，而分类器判 none 时那个节点根本不跑。于是「那个作业后来怎么样
+    了」能不能进检索，全押在这行提示词上——删掉它没有任何测试会变红。
+
+    真正测量它需要标注集，目前没有（见 spec §6）。这条测试只保证守卫不被
+    悄悄拆掉，不保证守卫有效。
+    """
+    from ai.agents.supervisor import _build_classifier_prompt
+
+    prompt = _build_classifier_prompt("那个作业后来怎么样了", [], "")
+
+    assert "指代性追问" in prompt, "recall 定义丢了「无回忆词的指代性追问」这一条"
+    assert "那个作业后来怎么样了" in prompt, "少样本例子没了，模型只能靠抽象描述猜"
+
+
 def test_supervisor_labels_independent_of_keywords(monkeypatch):
     """每个标签都要经过分类器，没有任何关键词表能替它下判断。
 

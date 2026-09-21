@@ -146,7 +146,9 @@ def _build_classifier_prompt(user_msg: str, emotion_context: list, recent_dialog
 
 has_emotion：是否需要情绪回应——用户在表达情绪、需要安慰或共情，或者 emoji 带有情绪含义。两个判断互相独立，可以同时为真。
 memory_kind：
-  recall = 询问过去具体发生过的事、说过的原话（"上次""那次""你还记得"）
+  recall = 询问过去具体发生过的事、说过的原话（"上次""那次""你还记得"），
+           也包括没有回忆词、但需要结合前文才能回答的指代性追问
+           （"那个作业后来怎么样了""迪士尼呢"）
   fact   = 询问稳定的身份、偏好、习惯或关系（"我喜欢什么""我们是什么关系"）
   none   = 不需要翻记忆
 confidence：你对上述判断的把握，0 到 1。"""
