@@ -12,7 +12,7 @@
 
 **已验证的前置条件：** `.venv/bin/python` 下的 langgraph 1.2.0 中，条件边函数返回节点名列表会产生并行扇出，汇入节点只在两者都完成后执行一次。验证代码见 Task 0。
 
-**关于执行顺序：** Task 1–3 是评测基线（Task 2 需要人工标注），Task 4–7 是代码改造。两者可以任意先后——只要基线是在**改造落地前**的 commit 上跑的。若先做完了 Task 4–7，用 `git stash` 回到改造前再跑 Task 3。
+**关于执行顺序：** 只有一条硬约束——**Task 3 的 `--predict baseline` 必须在 Task 4 落地前跑**。它要的是旧代码的判断，但**不需要标注**（预测和评分是分开的两步）。所以人工标注（Task 2）和算分（Task 7）可以拖到任何时候，实现不受阻。若 Task 4–7 已经落地，用 `git stash` 回到改造前补跑 Task 3。
 
 **已有测试基线（改造前，请勿打破）：**
 
@@ -317,7 +317,7 @@ Expected：`未标注 0 条`。有剩的就回去补。
 
 **Files:**
 - Create: `tools/eval_supervisor.py`
-- 产出（不入 git）: `media/eval/baseline.jsonl`、`media/eval/baseline-report.txt`
+- 产出（不入 git）: `media/eval/baseline.jsonl`（预测，改造前就能跑）、`media/eval/baseline-report.txt`（标注完成后才有）
 
 - [ ] **Step 1: 确认仍在改造前**
 
@@ -336,10 +336,13 @@ Expected：HEAD 是 Task 1 的提交（或更早），工作区干净。
 ```python
 """跑一遍 supervisor 分类器，对 media/eval/samples.jsonl 输出准确率报告。
 
-用法：
-    .venv/bin/python tools/eval_supervisor.py --out baseline
+预测和评分**分开**，因为人工标注会晚于代码改动到：
 
-只读标注文件，不写 db。报告写到 media/eval/<out>-report.txt（不入 git）。
+    .venv/bin/python tools/eval_supervisor.py --predict baseline   # 只跑分类器
+    .venv/bin/python tools/eval_supervisor.py --score baseline     # 之后对标注算分
+    .venv/bin/python tools/eval_supervisor.py --all --name after   # 一步到位
+
+只读标注文件，不写 db。产物写到 media/eval/（不入 git）。
 """
 
 from __future__ import annotations
@@ -390,18 +393,16 @@ def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
     return precision, recall, f1
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--out", default="run", help="报告文件名前缀")
-    args = parser.parse_args()
-
-    rows = [
+def _load_samples() -> list[dict]:
+    return [
         json.loads(line)
         for line in SAMPLES.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    rows = [r for r in rows if r.get("label_has_emotion") is not None and r.get("label_memory_kind")]
 
+
+def _predict_all(rows: list[dict], name: str) -> list[dict]:
+    """跑分类器并存预测。**不读标注**——标注可以之后才到。"""
     predictions = []
     for row in rows:
         result, elapsed = _predict(row["text"])
@@ -409,21 +410,44 @@ def main() -> None:
             "id": row["id"],
             "text": row["text"],
             "_bucket": row.get("_bucket", ""),
-            "gold_has_emotion": row["label_has_emotion"],
-            "gold_memory_kind": row["label_memory_kind"],
             "pred_has_emotion": result.get("has_emotion", False),
             "pred_memory_kind": result.get("memory_kind", "none"),
             "source": result.get("classification_source", ""),
             "seconds": round(elapsed, 3),
         })
-
-    out_jsonl = EVAL_DIR / f"{args.out}.jsonl"
+    out_jsonl = EVAL_DIR / f"{name}.jsonl"
     with out_jsonl.open("w", encoding="utf-8") as fh:
         for item in predictions:
             fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+    print(f"预测写入 {out_jsonl}（{len(predictions)} 条）")
+    return predictions
+
+
+def _score(name: str) -> None:
+    """把已存的预测和**当前**的标注对齐算分。标注没填的行自动跳过。"""
+    predictions = [
+        json.loads(line)
+        for line in (EVAL_DIR / f"{name}.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    labels = {row["id"]: row for row in _load_samples()}
+    merged = []
+    for item in predictions:
+        label = labels.get(item["id"], {})
+        if label.get("label_has_emotion") is None or not label.get("label_memory_kind"):
+            continue
+        merged.append({
+            **item,
+            "gold_has_emotion": label["label_has_emotion"],
+            "gold_memory_kind": label["label_memory_kind"],
+        })
+    predictions = merged
 
     n = len(predictions)
-    lines = [f"样本数 {n}", f"输出 {out_jsonl}", ""]
+    if not n:
+        print("没有已标注的样本——先完成 Task 2 再算分。")
+        return
+    lines = [f"评测对象 {name}.jsonl", f"已标注样本数 {n}", ""]
 
     # has_emotion 二分类
     tp = sum(1 for p in predictions if p["gold_has_emotion"] and p["pred_has_emotion"])
@@ -470,23 +494,48 @@ def main() -> None:
             )
 
     report = "\n".join(lines) + "\n"
-    (EVAL_DIR / f"{args.out}-report.txt").write_text(report, encoding="utf-8")
+    (EVAL_DIR / f"{name}-report.txt").write_text(report, encoding="utf-8")
     print(report)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--predict", metavar="NAME", help="跑分类器并存预测到 media/eval/NAME.jsonl")
+    parser.add_argument("--score", metavar="NAME", help="对已存的预测和当前标注算分")
+    parser.add_argument(
+        "--all", action="store_true",
+        help="跑分类器并对所有已标注的行算分（预测 + 评分一步到位）",
+    )
+    parser.add_argument("--name", default="run", help="配合 --all 使用的文件名前缀")
+    args = parser.parse_args()
+
+    if args.predict:
+        _predict_all(_load_samples(), args.predict)
+    if args.score:
+        _score(args.score)
+    if args.all:
+        _predict_all(_load_samples(), args.name)
+        _score(args.name)
+    if not (args.predict or args.score or args.all):
+        parser.error("至少给一个 --predict / --score / --all")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: 跑基线**
+- [ ] **Step 3: 跑基线预测**
 
 ```bash
-.venv/bin/python tools/eval_supervisor.py --out baseline
+.venv/bin/python tools/eval_supervisor.py --predict baseline
 ```
 
-Expected：打印一份报告；`media/eval/baseline-report.txt` 落盘。
+Expected：`预测写入 media/eval/baseline.jsonl（150 条）`。
 
-脚本里的 `_normalize` 是给基线用的：旧代码返回的是单标签 `intent`，`has_emotion` / `memory_kind` 都是从它派生（`recall`→`recall`、`memory`→`fact`、其余→`none`）。改造后 `supervisor_node` 直接返回这两个字段，`_normalize` 原样放行——所以同一份脚本能跑两版，数字才可比。
+**这一步不需要标注**——它只存旧分类器的判断。这样标注什么时候做完都行，评测不卡在人工上。
+（如果 Task 2 已经做完了，直接 `--all --name baseline` 一步出报告。）
+
+脚本里的 `_normalize` 是给基线用的：旧代码返回的是单标签 `intent`，`has_emotion` / `memory_kind` 都是从它派生（`recall`→`recall`、`memory`→`fact`、其余→`none`）。改造后 `supervisor_node` 直接返回这两个字段，`_normalize` 原样放行——所以同一份脚本能跑两版，**同一份 `--score` 也能对两版算分**，数字才可比。
 
 - [ ] **Step 4: 确认产出不进 git**
 
@@ -1507,19 +1556,28 @@ EOF
 - [ ] **Step 1: 跑改造后的评测**
 
 ```bash
-.venv/bin/python tools/eval_supervisor.py --out after
+.venv/bin/python tools/eval_supervisor.py --all --name after
 ```
 
-Expected：打印报告；`media/eval/after-report.txt` 落盘。
+Expected：打印报告；`media/eval/after.jsonl` 与 `media/eval/after-report.txt` 落盘。
 **注意**：这一步会真的调用 150 次 DeepSeek API（需要 `DEEPSEEK_API_KEY`），大约 3–8 分钟。
 
-- [ ] **Step 2: 并排看两份报告**
+- [ ] **Step 2: 补齐基线的分数（标注到此才必须完成）**
+
+```bash
+.venv/bin/python tools/eval_supervisor.py --score baseline
+```
+
+Expected：`media/eval/baseline-report.txt` 落盘。**不重新调用 API**——基线预测在 Task 3 就存好了。
+若输出「没有已标注的样本」，说明 Task 2 还没做完，回去补标注。
+
+- [ ] **Step 3: 并排看两份报告**
 
 ```bash
 diff -y --width=170 media/eval/baseline-report.txt media/eval/after-report.txt | head -40
 ```
 
-- [ ] **Step 3: 记录结论**
+- [ ] **Step 4: 记录结论**
 
 把三行数字抄进 spec 的 §7 验证方案末尾（准确率、快速通道命中率、平均耗时），并说明是否达标：
 
@@ -1532,7 +1590,7 @@ diff -y --width=170 media/eval/baseline-report.txt media/eval/after-report.txt |
 | `fallback` 占比 | — | | 目标 ≤ 1%——高于这个数说明 5s 超时太紧 |
 | 每条平均分类耗时 | | | 记下来，用于决定是否换小模型 |
 
-- [ ] **Step 4: 提交结论**
+- [ ] **Step 5: 提交结论**
 
 ```bash
 git add docs/superpowers/specs/2026-09-21-supervisor-intent-refactor-design.md
