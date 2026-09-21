@@ -8,6 +8,8 @@
 import json
 import re
 
+from django.db import close_old_connections
+
 from ai.rag.reranker import Reranker
 from ai.rag.query_rewriter import QueryRewriter
 from ai.rag.compressor import ContextCompressor
@@ -214,7 +216,25 @@ def _recent_dialogue_for_retrieval(messages: list, limit: int = 4) -> str:
 
 
 def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
-    """Memory Agent — 三轮检索：时间匹配 → 混合检索 → 话题路由"""
+    """Memory Agent — 三轮检索：时间匹配 → 混合检索 → 话题路由。
+
+    套一层 try/finally 是为了关数据库连接，见下面 _run_memory_agent 的说明。
+    """
+    try:
+        return _run_memory_agent(state, api_key, api_base)
+    finally:
+        close_old_connections()
+
+
+def _run_memory_agent(state: dict, api_key: str = "", api_base: str = "") -> dict:
+    """三轮检索：时间匹配 → 混合检索 → 话题路由。
+
+    单独成函数，好让外面那层只管关连接。注意这个节点跑在 LangGraph
+    的工作线程上（emotion 并行时是另一条），而 Django 的连接是线程局部的、
+    只有请求线程会收到 request_finished 信号——所以 CONN_MAX_AGE=0 那句
+    「每个请求结束就关掉」在这条线程上是句空话。不自己关，连接就一直挂在
+    线程池的线程上。
+    """
     user_msg = ""
     for msg in reversed(state.get("messages", [])):
         if hasattr(msg, "content"):

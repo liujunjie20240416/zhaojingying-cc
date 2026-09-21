@@ -735,6 +735,38 @@ def test_memory_kind_drives_retrieval_strategy(monkeypatch):
     assert searched == planned_queries, "recall 无视语义可靠性，强制翻原文"
 
 
+def test_memory_agent_closes_its_connection(monkeypatch):
+    """memory_agent 跑在 LangGraph 的工作线程上，要自己关连接。
+
+    那条线程不属于任何请求，收不到 Django 的 request_finished 信号，所以
+    CONN_MAX_AGE=0 那句「每个请求结束就关掉」在它身上是句空话。
+
+    两条断言分开测：正常返回要关，抛异常也要关。后者才是把 try/finally 和
+    「在函数末尾补一句」区分开的那个——只留前一条的话，把 close 挪到
+    `return result` 前面照样绿。
+    """
+    from langchain_core.messages import HumanMessage
+    from ai.agents import memory_agent as module
+
+    closed = []
+    monkeypatch.setattr(module, "close_old_connections", lambda: closed.append(True))
+
+    module.memory_agent_node({"messages": [HumanMessage(content="")]}, api_key="t", api_base="u")
+    assert closed == [True], "正常返回也要关"
+
+    closed.clear()
+
+    def boom(*a, **kw):
+        raise RuntimeError("检索炸了")
+
+    monkeypatch.setattr(module, "detect_memory_intent", boom)
+    with pytest.raises(RuntimeError):
+        module.memory_agent_node(
+            {"messages": [HumanMessage(content="你好")]}, api_key="t", api_base="u"
+        )
+    assert closed == [True], "抛异常同样要关，否则连接就留在线程上了"
+
+
 def test_tts_sender_persists_supervisor_decision():
     """provenance 里的 supervisor_decision 由三个 state 字段拼装。
 
