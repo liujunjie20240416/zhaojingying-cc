@@ -140,7 +140,9 @@ START → supervisor
 - `previous_intent`（意图继承机制整套移除）
 - `memory_done`、`emotion_done`（图无环，防环标志失效）
 
-**`reply_provenance` 变化**：`supervisor_intent` 字段改为 `supervisor_decision`，内容为完整的分类结果（含 `confidence` 与 `classification_source`）。该字段目前只有 `api/chat.py` 内部读写，前端不使用（已确认 `frontend/src` 无引用）。
+**`reply_provenance` 变化**：`supervisor_intent` 字段改为 `supervisor_decision`，内容为 `{has_emotion, memory_kind, classification_source}`。该字段目前只有 `api/chat.py` 内部读写，前端不使用（已确认 `frontend/src` 无引用）。
+
+**`confidence` 不进状态**：实现阶段验证发现 LangGraph 会**静默丢弃**节点返回中不在状态 schema 里的键。`confidence` 不参与路由也不进 provenance，只通过 `record_trace("supervisor.route", …)` 落进 trace，不从图结果里读。
 
 ### 3.6 可观测性
 
