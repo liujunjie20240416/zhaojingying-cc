@@ -387,7 +387,7 @@ pre.mermaid {
 <li><b>可恢复预处理 Pipeline</b>（聊天日、Chunk、双指纹断点、partial 语义）</li>
 <li><b>Style Profile</b>（从角色本人消息学习说话风格）</li>
 <li><b>多模态与语音</b>（图片走 GLM、ASR/TTS、前端气泡渲染）</li>
-<li><b>并发安全、隐私与降级</b>（代际号、行锁、CAS 抢占、私有数据隔离）</li>
+<li><b>并发安全、隐私与降级</b>（代际号、行锁、CAS 抢占、私有数据隔离、分层超时 + 轮级 deadline）</li>
 </ol>
 <p>每一点的完整讲法见 Part C。</p>
 </section>
@@ -446,6 +446,7 @@ SSE 流式返回：bubbles 整组 → audio 逐帧（TTS）→ reply_provenance 
   ▼
 落库（事务 + 行锁 + 代际校验，失败/空回复不落库）
   → 增量建向量索引 → 入队当日 Reflection 任务（后台线程）</code></pre>
+<p><b>这条链路上每一次外部调用都有界</b>，因为"没有超时"等于把用户的等待时间交给供应商决定：分类器 5s、embedding 8s（单轮最多 9 次）、图内辅助 LLM（情绪/规划/重排/压缩）12s、最终回复 45s，整图再套一层 <code>CHAT_TURN_DEADLINE</code> 90s 的 <code>asyncio.wait_for</code>。请求路径上的 client 都显式写了 <code>max_retries=1</code>——SDK 默认 read 超时是 600s 且重试 2 次，<b>单点最坏 30 分钟</b>；而且 httpx 的 read 是 inter-byte 超时（收到任意字节就重置），它连单次调用的总墙钟都不限制。分层值之和大于轮级 deadline 是<b>预期</b>的：两者覆盖不同的失败形状——一处挂住由那一层的兜底优雅降级，多处同时挂住由 deadline 早死早超生。</p>
 <h3>一次微信导入的完整链路（预处理流水线）</h3>
 <pre><code>上传 TXT（UTF-8，可带/不带方括号时间戳，自动噪音过滤）
   │
@@ -533,6 +534,7 @@ uv run python manage.py run_reflection_jobs --watch                    # 常驻�
 <p><b>关键细节</b>：</p>
 <ul>
 <li>每个 LLM 环节都有<b>非 LLM 兜底</b>：rerank 失败 → 原分排序；压缩失败 → 截断；向量库不存在 → 纯词法；向量表查询失败 → 静默降级。</li>
+<li>兜底是<b>分阶段</b>的，不是最外层一个大 try：五个检索阶段各自兜底，一块失败只丢那一块。区别很实在——rerank 挂了不该把已经查回来的语义事实一起丢掉，那是"记忆少了一块"退化成"这轮没有记忆"。</li>
 <li>分数故意<b>不跨来源归一化</b>（词法 0~1、FTS5 固定分、向量 0~1 不具可比性）：排序靠各来源相对高低，去重靠内容 key。这是刻意的简化——简单、稳定，且统一归一化在来源差异巨大的场景下收益有限。</li>
 </ul>
 <h3>C4. 上下文工程：预算、估算、折叠、意图驱动</h3>
@@ -564,7 +566,7 @@ uv run python manage.py run_reflection_jobs --watch                    # 常驻�
 <p><b>fail-open 而不是 fail-closed</b>：分类器超时、返回非法 JSON 或空内容时，降级结果不是"不需要记忆"，而是 <code>memory_kind=recall</code> + <code>has_emotion=false</code>，按最宽的模式检索一次。理由：分类器挂了只该让这一轮变慢变贵，不该让用户在一次故障中<b>永久损失一次回忆</b>。<code>has_emotion</code> 取 false 是因为情绪分析本身也是一次 LLM 调用，分类器连不上它大概率也连不上，重试只是叠加延迟。</p>
 <p><code>classification_source</code> 记录判定来自 <code>fast_path</code> / <code>llm</code> / <code>fallback</code>，随 <code>reply_provenance</code> 落库——出问题时能直接分清"是分类器判错了"还是"分类器压根没连上"。</p>
 <p><b>超时从 20s 改成 5s</b>：分类器从"偶发调用"变成"每条消息都调用"，20s 的最坏情况不再可接受。</p>
-<p><b>一个 LangGraph 的行为细节（很好的加分项）</b>：LangGraph 会<b>静默丢弃</b>节点返回值里不在 state schema 里声明的键——不报错，只是丢掉。但它<b>会</b>把这些键传给紧邻下游的条件边路由函数。所以路由能看见一个最终状态里并不存在的字段：路由逻辑是对的，而 <code>api/chat.py</code> 从最终结果里回读该字段拿到的是默认值。这个差异是实测确认的，不是读文档猜的。</p>
+<p><b>超时是分层的，不是一个大数字</b>：5s 只是分类器那一层，全链路上限是逐层给的——embedding 8s、图内辅助 LLM 12s、最终回复 45s，整图再套一层 90s 的 <code>CHAT_TURN_DEADLINE</code>。两个容易讲错的地方：一是 SDK 默认 read 超时 600s、重试 2 次，<b>不写 <code>max_retries</code> 的话上面每个数字都要乘 3</b>；二是 httpx 的 read 是 inter-byte 的，收到任意字节就重置，所以它约束的是"多久没有新数据"，不是"这次调用总共能跑多久"——真正给整轮封顶的是那个外层 deadline。轮级 deadline 一响用户这轮就什么都没有，所以它必须大于真实慢路径，只该在病态情况下响；分层值之和大于 deadline 因此是正常的，不是配置错误。 <b>一个 LangGraph 的行为细节（很好的加分项）</b>：LangGraph 会<b>静默丢弃</b>节点返回值里不在 state schema 里声明的键——不报错，只是丢掉。但它<b>会</b>把这些键传给紧邻下游的条件边路由函数。所以路由能看见一个最终状态里并不存在的字段：路由逻辑是对的，而 <code>api/chat.py</code> 从最终结果里回读该字段拿到的是默认值。这个差异是实测确认的，不是读文档猜的。</p>
 <p><b>追问应对</b>：</p>
 <ul>
 <li>"为什么用 LangGraph 不用自写状态机？" → 条件边返回列表就能表达并行扇出，自己写要手搓调度和汇合；节点状态可调试、支持持久化；图结构便于演进（加节点/加边）。</li>
@@ -606,7 +608,9 @@ uv run python manage.py run_reflection_jobs --watch                    # 常驻�
 <li>图片：base64 只进最终视觉模型调用（Supervisor/Memory/Emotion 只见文本）；<code>chat_images</code> 路径一律 404；附件走私有鉴权 URL；LangSmith 对视觉调用关闭采集。</li>
 <li>聊天脱敏工具：识别密码/身份证号，不修改原文件。</li>
 </ul>
-<p><b>失败降级契约（贯穿全程）</b>：Supervisor 分类失败 → chat；Emotion 失败 → neutral；Rerank 失败 → 原分；压缩失败 → 截断；折叠失败 → 有界原文投影；图异常 → SSE error 事件透出（"AI 回复生成失败，请重试"），<b>空回复不落库</b>。每个 LLM 调用点都有非 LLM 兜底——"检索/分析失败不炸整轮"是贯穿性设计。</p>
+<p><b>失败降级契约（贯穿全程）</b>：Supervisor 分类失败 → chat；Emotion 失败 → neutral；Rerank 失败 → 原分；压缩失败 → 截断；折叠失败 → 有界原文投影；Memory Agent 检索失败 → 分阶段丢弃那一块记忆、照常回答；图异常 → SSE error 事件透出（"AI 回复生成失败，请重试"），<b>空回复不落库</b>。每个 LLM 调用点都有非 LLM 兜底——"检索/分析失败不炸整轮"是贯穿性设计。</p>
+<p>这里有个自己查出来的例子：Memory Agent 曾经是这条契约唯一的例外——它分支最多、外部依赖最杂（向量库 + 两个 FTS 表 + 两路 embedding + 两次 LLM），却一个 <code>except</code> 都没有。实测让 memory 分支抛异常、emotion 分支正常返回，<code>app.ainvoke</code> 直接抛出该异常，conversation 节点一次都没执行，兄弟分支已经跑完的 LLM 调用一并作废，前端只看到"AI 回复生成失败"。一个只影响记忆检索的瞬时错误（比如 SQLite 的 <code>database is locked</code>）不该让用户整轮拿不到回复。现在改成五个阶段各自兜底 + 最外层再兜一次没预料到的，降级理由进 trace。</p>
+<p><b>而这个改动本身还漏了一处，是跑真实故障跑出来的</b>：两个检索 client（<code>ConversationHistorySearch</code> / <code>Reranker</code>）构造在<b>所有阶段守卫之前</b>。它们的构造是会抛的——<code>CustomEmbeddings</code> 在 key 为空时直接 <code>OpenAIError</code>，而"embedding key 失效"恰恰是这个节点最可能的真实故障。于是分阶段兜底在这个故障下等于没写：一次鉴权失效带走全部五个阶段，其中时间块、话题、关系概览都是纯 SQL，本来活得下来。外层 <code>except</code> 还在，所以整轮没死、用户看不出问题——<b>修复前那一轮的回复是"哪件呀宝宝，我记性最近不太好"，听起来像个正常的撒娇，实际是一次完全静默的检索全灭，而且因为没干活它比正常轮次还快</b>（2.9s vs 7.7s）。修复后同一故障只剩 <code>memory_agent.history_search</code> 一条降级记录，仍带回 509 token 的记忆。教训是分阶段兜底要连<b>构造</b>一起兜：写测试时容易只 patch 方法调用，而真实的第一次失败往往发生在构造里。</p>
 </section>
 
 <section id="part-d">
@@ -746,7 +750,7 @@ uv run python manage.py run_reflection_jobs --watch                    # 常驻�
 <h3>简历 bullet（可直接用）</h3>
 <blockquote>
 <span class="tag">简历 bullet（可直接用）</span>
-<p><b>DeepEcho（千寻）｜Memory-Driven AI Companion｜个人全栈 AI 项目</b> 基于 FastAPI、Django、Vue 3、LangGraph、DeepSeek + GLM 构建多模态 AI 陪伴应用。设计 Imported Chat / Online Chat / Semantic Memory / 滚动摘要+阶段胶囊四层记忆体系，通过 FTS5 + LanceDB 混合检索、Query Rewrite、时间锚定检索、Rerank 与 Context Compressor 实现跨来源证据召回。实现 2.3 万条真实聊天数据的并发 Map/Reduce 预处理（5 worker、Chunk Checkpoint 双指纹断点续跑、partial 状态、进度封顶），关系时间线与角色 Style Profile 自动学习。使用持久日级 Reflection 任务（条件 UPDATE CAS 抢占、30 分钟超时回收、代际号并发防线）、原子写入与软/硬上下文预算（32K/40K、CJK 估算器）保证长任务可靠性与上下文可控；支持图片理解（GLM）、流式 TTS（DashScope）、结构化多气泡 IM 式回复与移动端适配。将 LangGraph Supervisor 从单标签关键词路由重构为多标签 LLM 分类（一次调用判出两个互相独立的标签，记忆与情绪节点由串行改为并行扇出），并以确定性快路径 + fail-open 降级 + 判定来源落库保证可观测性。</p>
+<p><b>DeepEcho（千寻）｜Memory-Driven AI Companion｜个人全栈 AI 项目</b> 基于 FastAPI、Django、Vue 3、LangGraph、DeepSeek + GLM 构建多模态 AI 陪伴应用。设计 Imported Chat / Online Chat / Semantic Memory / 滚动摘要+阶段胶囊四层记忆体系，通过 FTS5 + LanceDB 混合检索、Query Rewrite、时间锚定检索、Rerank 与 Context Compressor 实现跨来源证据召回。实现 2.3 万条真实聊天数据的并发 Map/Reduce 预处理（5 worker、Chunk Checkpoint 双指纹断点续跑、partial 状态、进度封顶），关系时间线与角色 Style Profile 自动学习。使用持久日级 Reflection 任务（条件 UPDATE CAS 抢占、30 分钟超时回收、代际号并发防线）、原子写入与软/硬上下文预算（32K/40K、CJK 估算器）保证长任务可靠性与上下文可控；支持图片理解（GLM）、流式 TTS（DashScope）、结构化多气泡 IM 式回复与移动端适配。将 LangGraph Supervisor 从单标签关键词路由重构为多标签 LLM 分类（一次调用判出两个互相独立的标签，记忆与情绪节点由串行改为并行扇出），并以确定性快路径 + fail-open 降级 + 判定来源落库保证可观测性；为全链路补齐分层超时与轮级 deadline，使每次外部调用与整轮对话都有明确上界。</p>
 </blockquote>
 <h3>口头讲述版（面试第一分钟）</h3>
 <blockquote>
@@ -767,7 +771,10 @@ uv run python manage.py run_reflection_jobs --watch                    # 常驻�
 <tr><td>9000 token / 8000 字符</td><td>折叠触发阈值 / 每批折叠量</td></tr>
 <tr><td>最近 10 轮 / 6000 token</td><td>折叠后保留的原文</td></tr>
 <tr><td>±5 条消息</td><td>导入命中消息的窗口扩展</td></tr>
-<tr><td>5s 超时</td><td>Supervisor LLM 分类超时</td></tr>
+<tr><td>5s / 12s / 45s</td><td>分类器 / 图内辅助 LLM（情绪·规划·重排·压缩）/ 最终回复，各自的超时</td></tr>
+<tr><td>8s / 9 次</td><td>单次 embedding 超时 / 一轮对话最多几次 embedding</td></tr>
+<tr><td>90s</td><td><code>CHAT_TURN_DEADLINE</code>，<code>app.ainvoke</code> 的整轮上限</td></tr>
+<tr><td>max_retries=1</td><td>请求路径所有 client 显式覆盖（SDK 默认 2，即 timeout×3 才是单点最坏值）</td></tr>
 <tr><td>2 个标签 / 3 种来源</td><td>Supervisor 输出（has_emotion + memory_kind）/ 判定来源（fast_path / llm / fallback）</td></tr>
 <tr><td>5 worker / 120 条 / 10000 字符 / overlap 6</td><td>预处理并行度与 Chunk 上限</td></tr>
 <tr><td>30 分钟 / 3 次</td><td>Reflection 超时回收 / 最大尝试</td></tr>
@@ -1120,7 +1127,8 @@ Online Chat ─────────┘       Time/Topic/Overview ───�
 <li><b>当前折叠互斥是单进程保证</b>：多 worker 需要把进程锁改成数据库级 claim/lease 或任务队列；Reflection 已经有条件 UPDATE 的 CAS 抢占思路。</li>
 <li><b>当前混合分数不是统一概率</b>：如果要提升排序稳定性，下一步做分桶评测、来源分数校准或 Reciprocal Rank Fusion，而不是凭感觉调常数。</li>
 <li><b>当前有工程回归测试，但缺黄金评测集</b>：下一步给回忆问题标注正确证据，测召回、重排和 grounded answer。</li>
-<li><b>当前 LLM 兜底以可用性为先</b>：压缩失败硬截断、重排失败沿用原序；生产版还可以增加结构化输出 schema、模型超时预算、重试退避和成本熔断。</li>
+<li><b>当前 LLM 兜底以可用性为先</b>：压缩失败硬截断、重排失败沿用原序；生产版还可以增加结构化输出 schema、重试退避和成本熔断。（<b>超时预算已经有了</b>——分层超时 + 轮级 deadline，见 C5；缺的是退避和熔断：现在是一次固定重试，没有指数退避，也没有"这个供应商今天已经错了很多次，先别再打"的熔断。）</li>
+<li><b>超时值是起点，不是标定值</b>：45s / 90s 这组是按调用类型估的，还没用真实 span 时长校准过。下一步是读 LangSmith 里各 span 的 p99，把每层设到观测值的 3 倍左右——现在的数字保证了"有界"，不保证"刚好"。</li>
 </ul>
 <h3>H6. 绝对不要这样说</h3>
 <div class="table-scroll"><table>

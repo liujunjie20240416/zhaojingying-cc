@@ -48,7 +48,7 @@
 5. **可恢复预处理 Pipeline**（聊天日、Chunk、双指纹断点、partial 语义）
 6. **Style Profile**（从角色本人消息学习说话风格）
 7. **多模态与语音**（图片走 GLM、ASR/TTS、前端气泡渲染）
-8. **并发安全、隐私与降级**（代际号、行锁、CAS 抢占、私有数据隔离）
+8. **并发安全、隐私与降级**（代际号、行锁、CAS 抢占、私有数据隔离、分层超时 + 轮级 deadline）
 
 每一点的完整讲法见 Part C。
 
@@ -114,6 +114,8 @@ SSE 流式返回：bubbles 整组 → audio 逐帧（TTS）→ reply_provenance 
 落库（事务 + 行锁 + 代际校验，失败/空回复不落库）
   → 增量建向量索引 → 入队当日 Reflection 任务（后台线程）
 ```
+
+**这条链路上每一次外部调用都有界**，因为"没有超时"等于把用户的等待时间交给供应商决定：分类器 5s、embedding 8s（单轮最多 9 次）、图内辅助 LLM（情绪/规划/重排/压缩）12s、最终回复 45s，整图再套一层 `CHAT_TURN_DEADLINE` 90s 的 `asyncio.wait_for`。请求路径上的 client 都显式写了 `max_retries=1`——SDK 默认 read 超时是 600s 且重试 2 次，**单点最坏 30 分钟**；而且 httpx 的 read 是 inter-byte 超时（收到任意字节就重置），它连单次调用的总墙钟都不限制。分层值之和大于轮级 deadline 是**预期**的：两者覆盖不同的失败形状——一处挂住由那一层的兜底优雅降级，多处同时挂住由 deadline 早死早超生。
 
 ## 一次微信导入的完整链路（预处理流水线）
 
@@ -217,6 +219,7 @@ uv run python manage.py run_reflection_jobs --watch                    # 常驻�
 
 **关键细节**：
 - 每个 LLM 环节都有**非 LLM 兜底**：rerank 失败 → 原分排序；压缩失败 → 截断；向量库不存在 → 纯词法；向量表查询失败 → 静默降级。
+- 兜底是**分阶段**的，不是最外层一个大 try：五个检索阶段各自兜底，一块失败只丢那一块。区别很实在——rerank 挂了不该把已经查回来的语义事实一起丢掉，那是"记忆少了一块"退化成"这轮没有记忆"。
 - 分数故意**不跨来源归一化**（词法 0~1、FTS5 固定分、向量 0~1 不具可比性）：排序靠各来源相对高低，去重靠内容 key。这是刻意的简化——简单、稳定，且统一归一化在来源差异巨大的场景下收益有限。
 
 ## C4. 上下文工程：预算、估算、折叠、意图驱动
@@ -257,6 +260,7 @@ uv run python manage.py run_reflection_jobs --watch                    # 常驻�
 
 **超时从 20s 改成 5s**：分类器从"偶发调用"变成"每条消息都调用"，20s 的最坏情况不再可接受。
 
+**超时是分层的，不是一个大数字**：5s 只是分类器那一层，全链路上限是逐层给的——embedding 8s、图内辅助 LLM 12s、最终回复 45s，整图再套一层 90s 的 `CHAT_TURN_DEADLINE`。两个容易讲错的地方：一是 SDK 默认 read 超时 600s、重试 2 次，**不写 `max_retries` 的话上面每个数字都要乘 3**；二是 httpx 的 read 是 inter-byte 的，收到任意字节就重置，所以它约束的是"多久没有新数据"，不是"这次调用总共能跑多久"——真正给整轮封顶的是那个外层 deadline。轮级 deadline 一响用户这轮就什么都没有，所以它必须大于真实慢路径，只该在病态情况下响；分层值之和大于 deadline 因此是正常的，不是配置错误。
 **一个 LangGraph 的行为细节（很好的加分项）**：LangGraph 会**静默丢弃**节点返回值里不在 state schema 里声明的键——不报错，只是丢掉。但它**会**把这些键传给紧邻下游的条件边路由函数。所以路由能看见一个最终状态里并不存在的字段：路由逻辑是对的，而 `api/chat.py` 从最终结果里回读该字段拿到的是默认值。这个差异是实测确认的，不是读文档猜的。
 
 **追问应对**：
@@ -305,7 +309,11 @@ uv run python manage.py run_reflection_jobs --watch                    # 常驻�
 - 图片：base64 只进最终视觉模型调用（Supervisor/Memory/Emotion 只见文本）；`chat_images` 路径一律 404；附件走私有鉴权 URL；LangSmith 对视觉调用关闭采集。
 - 聊天脱敏工具：识别密码/身份证号，不修改原文件。
 
-**失败降级契约（贯穿全程）**：Supervisor 分类失败 → chat；Emotion 失败 → neutral；Rerank 失败 → 原分；压缩失败 → 截断；折叠失败 → 有界原文投影；图异常 → SSE error 事件透出（"AI 回复生成失败，请重试"），**空回复不落库**。每个 LLM 调用点都有非 LLM 兜底——"检索/分析失败不炸整轮"是贯穿性设计。
+**失败降级契约（贯穿全程）**：Supervisor 分类失败 → chat；Emotion 失败 → neutral；Rerank 失败 → 原分；压缩失败 → 截断；折叠失败 → 有界原文投影；Memory Agent 检索失败 → 分阶段丢弃那一块记忆、照常回答；图异常 → SSE error 事件透出（"AI 回复生成失败，请重试"），**空回复不落库**。每个 LLM 调用点都有非 LLM 兜底——"检索/分析失败不炸整轮"是贯穿性设计。
+
+这里有个自己查出来的例子：Memory Agent 曾经是这条契约唯一的例外——它分支最多、外部依赖最杂（向量库 + 两个 FTS 表 + 两路 embedding + 两次 LLM），却一个 `except` 都没有。实测让 memory 分支抛异常、emotion 分支正常返回，`app.ainvoke` 直接抛出该异常，conversation 节点一次都没执行，兄弟分支已经跑完的 LLM 调用一并作废，前端只看到"AI 回复生成失败"。一个只影响记忆检索的瞬时错误（比如 SQLite 的 `database is locked`）不该让用户整轮拿不到回复。现在改成五个阶段各自兜底 + 最外层再兜一次没预料到的，降级理由进 trace。
+
+**而这个改动本身还漏了一处，是跑真实故障跑出来的**：两个检索 client（`ConversationHistorySearch` / `Reranker`）构造在**所有阶段守卫之前**。它们的构造是会抛的——`CustomEmbeddings` 在 key 为空时直接 `OpenAIError`，而"embedding key 失效"恰恰是这个节点最可能的真实故障。于是分阶段兜底在这个故障下等于没写：一次鉴权失效带走全部五个阶段，其中时间块、话题、关系概览都是纯 SQL，本来活得下来。外层 `except` 还在，所以整轮没死、用户看不出问题——**修复前那一轮的回复是"哪件呀宝宝，我记性最近不太好"，听起来像个正常的撒娇，实际是一次完全静默的检索全灭，而且因为没干活它比正常轮次还快**（2.9s vs 7.7s）。修复后同一故障只剩 `memory_agent.history_search` 一条降级记录，仍带回 509 token 的记忆。教训是分阶段兜底要连**构造**一起兜：写测试时容易只 patch 方法调用，而真实的第一次失败往往发生在构造里。
 
 ---
 
@@ -437,7 +445,7 @@ pytest + pytest-django，覆盖：意图路由、记忆隔离、统一检索、�
 ## 简历 bullet（可直接用）
 
 > **DeepEcho（千寻）｜Memory-Driven AI Companion｜个人全栈 AI 项目**
-> 基于 FastAPI、Django、Vue 3、LangGraph、DeepSeek + GLM 构建多模态 AI 陪伴应用。设计 Imported Chat / Online Chat / Semantic Memory / 滚动摘要+阶段胶囊四层记忆体系，通过 FTS5 + LanceDB 混合检索、Query Rewrite、时间锚定检索、Rerank 与 Context Compressor 实现跨来源证据召回。实现 2.3 万条真实聊天数据的并发 Map/Reduce 预处理（5 worker、Chunk Checkpoint 双指纹断点续跑、partial 状态、进度封顶），关系时间线与角色 Style Profile 自动学习。使用持久日级 Reflection 任务（条件 UPDATE CAS 抢占、30 分钟超时回收、代际号并发防线）、原子写入与软/硬上下文预算（32K/40K、CJK 估算器）保证长任务可靠性与上下文可控；支持图片理解（GLM）、流式 TTS（DashScope）、结构化多气泡 IM 式回复与移动端适配。将 LangGraph Supervisor 从单标签关键词路由重构为多标签 LLM 分类（一次调用判出两个互相独立的标签，记忆与情绪节点由串行改为并行扇出），并以确定性快路径 + fail-open 降级 + 判定来源落库保证可观测性。
+> 基于 FastAPI、Django、Vue 3、LangGraph、DeepSeek + GLM 构建多模态 AI 陪伴应用。设计 Imported Chat / Online Chat / Semantic Memory / 滚动摘要+阶段胶囊四层记忆体系，通过 FTS5 + LanceDB 混合检索、Query Rewrite、时间锚定检索、Rerank 与 Context Compressor 实现跨来源证据召回。实现 2.3 万条真实聊天数据的并发 Map/Reduce 预处理（5 worker、Chunk Checkpoint 双指纹断点续跑、partial 状态、进度封顶），关系时间线与角色 Style Profile 自动学习。使用持久日级 Reflection 任务（条件 UPDATE CAS 抢占、30 分钟超时回收、代际号并发防线）、原子写入与软/硬上下文预算（32K/40K、CJK 估算器）保证长任务可靠性与上下文可控；支持图片理解（GLM）、流式 TTS（DashScope）、结构化多气泡 IM 式回复与移动端适配。将 LangGraph Supervisor 从单标签关键词路由重构为多标签 LLM 分类（一次调用判出两个互相独立的标签，记忆与情绪节点由串行改为并行扇出），并以确定性快路径 + fail-open 降级 + 判定来源落库保证可观测性；为全链路补齐分层超时与轮级 deadline，使每次外部调用与整轮对话都有明确上界。
 
 ## 口头讲述版（面试第一分钟）
 
@@ -459,7 +467,10 @@ pytest + pytest-django，覆盖：意图路由、记忆隔离、统一检索、�
 | 9000 token / 8000 字符 | 折叠触发阈值 / 每批折叠量 |
 | 最近 10 轮 / 6000 token | 折叠后保留的原文 |
 | ±5 条消息 | 导入命中消息的窗口扩展 |
-| 5s 超时 | Supervisor LLM 分类超时 |
+| 5s / 12s / 45s | 分类器 / 图内辅助 LLM（情绪·规划·重排·压缩）/ 最终回复，各自的超时 |
+| 8s / 9 次 | 单次 embedding 超时 / 一轮对话最多几次 embedding |
+| 90s | `CHAT_TURN_DEADLINE`，`app.ainvoke` 的整轮上限 |
+| max_retries=1 | 请求路径所有 client 显式覆盖（SDK 默认 2，即 timeout×3 才是单点最坏值） |
 | 2 个标签 / 3 种来源 | Supervisor 输出（has_emotion + memory_kind）/ 判定来源（fast_path / llm / fallback） |
 | 5 worker / 120 条 / 10000 字符 / overlap 6 | 预处理并行度与 Chunk 上限 |
 | 30 分钟 / 3 次 | Reflection 超时回收 / 最大尝试 |
@@ -946,7 +957,8 @@ Conversation Agent 的思路是：
 - **当前折叠互斥是单进程保证**：多 worker 需要把进程锁改成数据库级 claim/lease 或任务队列；Reflection 已经有条件 UPDATE 的 CAS 抢占思路。
 - **当前混合分数不是统一概率**：如果要提升排序稳定性，下一步做分桶评测、来源分数校准或 Reciprocal Rank Fusion，而不是凭感觉调常数。
 - **当前有工程回归测试，但缺黄金评测集**：下一步给回忆问题标注正确证据，测召回、重排和 grounded answer。
-- **当前 LLM 兜底以可用性为先**：压缩失败硬截断、重排失败沿用原序；生产版还可以增加结构化输出 schema、模型超时预算、重试退避和成本熔断。
+- **当前 LLM 兜底以可用性为先**：压缩失败硬截断、重排失败沿用原序；生产版还可以增加结构化输出 schema、重试退避和成本熔断。（**超时预算已经有了**——分层超时 + 轮级 deadline，见 C5；缺的是退避和熔断：现在是一次固定重试，没有指数退避，也没有"这个供应商今天已经错了很多次，先别再打"的熔断。）
+- **超时值是起点，不是标定值**：45s / 90s 这组是按调用类型估的，还没用真实 span 时长校准过。下一步是读 LangSmith 里各 span 的 p99，把每层设到观测值的 3 倍左右——现在的数字保证了"有界"，不保证"刚好"。
 
 ## H6. 绝对不要这样说
 

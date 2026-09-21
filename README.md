@@ -156,7 +156,9 @@ flowchart LR
 
 **失败开放（fail-open）**：分类器不可用时不能判成“不需要记忆”——那等于让用户在一次故障中永久损失一次回忆。降级结果为 `memory_kind=recall`、`has_emotion=false`（情绪分析本身也是一次 LLM 调用，分类器连不上它大概率也连不上，重试只是叠加延迟），并按最宽的模式检索一次。`classification_source` 记录本轮判定来自 `fast_path` / `llm` / `fallback`，随回复溯源一起持久化。
 
-分类器超时定为 5s（`CLASSIFIER_TIMEOUT`）——它从“偶发调用”变成“每条消息都调用”之后，原先 20s 的最坏情况不再可接受。
+**降级不止在 supervisor**：链路上每个 LLM 环节都有非 LLM 兜底——情绪分析降级成 `neutral`、重排失败保留原分数、压缩失败回退截断、摘要折叠失败退回有界的原文投影、向量检索失败静默回退关键词。Memory Agent 曾经是唯一的例外：它分支最多、外部依赖最杂（向量库 + 两个 FTS 表 + 两路 embedding + 两次 LLM），却一个 `except` 都没有，一次瞬时检索错误就让整轮拿不到回复。现在是**分阶段兜底**：五个检索阶段各自兜底，一块失败只丢那一块（rerank 挂了不该把已经查回来的语义事实一起丢掉），最外层再兜一次没预料到的，降级理由进 trace。
+
+**超时是分层的，外加轮级 deadline**：分类器 5s（`CLASSIFIER_TIMEOUT`）——它从“偶发调用”变成“每条消息都调用”之后，原先 20s 的最坏情况不再可接受；embedding 8s（单轮最多 9 次）；图内辅助 LLM（情绪/规划/重排/压缩）12s；最终回复 45s；整轮 `CHAT_TURN_DEADLINE` 90s 包住 `app.ainvoke`。请求路径上的 client 都显式设了 `max_retries=1`——SDK 默认 read=600s 配 2 次重试，单点最坏 30 分钟，而 httpx 的 read 还是 inter-byte 超时（收到任意字节就重置），连单次调用的总墙钟都不限。分层值之和大于轮级 deadline 是**预期**的：两者覆盖不同的失败形状——一处挂住则该处优雅降级，多处挂住则由 deadline 早死早超生。
 
 **关于“还有呢”这类短消息**：省略指代由分类器提示词里的最近对话来理解，每轮重新分类，不做跨轮意图继承。多一次调用的代价与取舍见 [`docs/superpowers/specs/2026-09-21-supervisor-intent-refactor-design.md`](docs/superpowers/specs/2026-09-21-supervisor-intent-refactor-design.md) §6。
 
@@ -210,6 +212,7 @@ Conversation Agent 输出 `{"bubbles": [...]}`，前端按数组逐条渲染。�
 - Reflection 采用持久日级任务、唯一约束、原子抢占、失败重试和超时任务恢复。
 - 在线聊天原文永久保留；摘要、胶囊、Semantic Memory 和 LanceDB 都是可重建的派生层。
 - **失败不静默**：图执行或供应商异常通过 SSE error 事件透出到前端（“AI 回复生成失败，请重试”），不再吞掉错误；空回复或失败回复不落库，避免污染后续上下文。
+- **等待有上界**：每次外部调用都有分层超时（分类器 5s / embedding 8s / 图内辅助 LLM 12s / 最终回复 45s），整图再套 90s 的 `CHAT_TURN_DEADLINE`；请求路径上的 client 显式 `max_retries=1`。没有这些数字时，SDK 默认 read 600s × 3 次尝试意味着一次供应商挂住就能让用户干等半小时，且界面上没有任何信号。轮级 deadline 只保证用户不再等，不保证服务端停手——同步节点跑在 executor 线程上取消不了。
 - **回复溯源**：每条回复持久化 `reply_provenance`（本轮回溯到哪些摘要、胶囊、原文证据，以及 `supervisor_decision`——两个标签的值加上判定来源 `fast_path` / `llm` / `fallback`），前端可查看，后端可审计。
 - **并发安全**：回复落库与清空历史之间用行锁 + 代际号（`online_history_generation`）保证原子性；滚动折叠按好友串行化，检查点不会并发回退。
 - **数据库连接的关闭时机**：Django 把 `close_old_connections` 挂在它自己的响应对象 close 上，而本应用是 FastAPI + `django.setup()` 只用 ORM，`WSGIHandler` 只挂在 `/admin`——所以 `/api/*` 既不触发 `request_started` 也不触发 `request_finished`，`CONN_MAX_AGE=0` 那句「每个请求结束就关掉」对链路上任何线程都是空话。当前在 SQLite 下代价很低（每线程一个句柄）；真正需要处理的是跨请求复用的 anyio 工作线程（同步路由的 ORM 读、SSE 生成器的写），换到 Postgres 之前必须补上。
