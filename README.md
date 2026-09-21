@@ -29,10 +29,10 @@
 ```mermaid
 flowchart LR
     UI["Vue 3 Web / Mobile UI"] --> API["FastAPI API"]
-    API --> SUP["LangGraph Supervisor"]
-    SUP -->|普通闲聊 / 时间| CONV["Conversation Agent"]
-    SUP -->|回忆 / 稳定事实| MEM["Memory Agent"]
-    SUP -->|强情绪 / 歧义| EMO["Emotion Agent"]
+    API --> SUP["LangGraph Supervisor<br/>多标签分类"]
+    SUP -->|memory_kind ≠ none| MEM["Memory Agent"]
+    SUP -->|has_emotion| EMO["Emotion Agent"]
+    SUP -->|两个都为假| CONV["Conversation Agent"]
     MEM --> CONV
     EMO --> CONV
     CONV -->|文字| DEEPSEEK["DeepSeek V4 Pro"]
@@ -109,11 +109,11 @@ SQLite 是结构化事实的真源，LanceDB 只负责检索投影。重建索�
 
 ```mermaid
 flowchart TD
-    Q["当前用户消息"] --> ROUTE["Supervisor 意图路由"]
+    Q["当前用户消息"] --> ROUTE["Supervisor 多标签分类"]
     ROUTE --> BASE["角色设定 + Style Profile + 当前时间"]
     ROUTE --> RECENT["最近 10 轮 Online Chat 原文"]
     ROUTE --> SUMMARY["较早对话滚动摘要"]
-    ROUTE -->|仅记忆问题| RETRIEVE["语义事实 + 原始聊天证据"]
+    ROUTE -->|memory_kind ≠ none| RETRIEVE["语义事实 + 原始聊天证据"]
     RETRIEVE --> COMPRESS["Rerank + Context Compressor"]
     BASE --> FINAL["单一最终 System Prompt"]
     RECENT --> FINAL
@@ -123,29 +123,42 @@ flowchart TD
 
 关键策略：
 
-- **Token 预算**（`ai/memory/context_budget.py`）：输入上下文有 SOFT 32K / HARD 40K 两级预算（`CONTEXT_*` 可覆盖），内置 CJK token 估算器，按意图对记忆区块加权分配，越界时逐区块截断；`context_diagnostics` 把每次请求的预算使用情况发给前端，可在“上下文监控”面板查看。
+- **Token 预算**（`ai/memory/context_budget.py`）：输入上下文有 SOFT 32K / HARD 40K 两级预算（`CONTEXT_*` 可覆盖），内置 CJK token 估算器，按记忆区块的意图权重分配，越界时逐区块截断；`context_diagnostics` 把每次请求的预算使用情况发给前端，可在“上下文监控”面板查看。意图权重来自 `detect_memory_intent`（时间模式、主体、类别），由 Memory Agent 在检索时产出并带回状态——所以只有真正检索的那一轮才有加权分配，闲聊轮走默认权重。
 - **滚动折叠按 token 触发**：未折叠的 Online Chat 超过 `CONTEXT_WORKING_HISTORY_TOKENS`（默认 9000）时触发压缩，保留最近 10 轮原文（约 6000 token 上限）；每次折叠按 8000 字符分批，逐批生成工作摘要和阶段胶囊并推进 `summary_through_message_id` 检查点。折叠按好友维度串行化（进程内锁 + 锁内重读检查点），并发请求不会重复折叠或回退检查点；压缩失败时安全降级为有界的原始消息投影，不丢失尚未摘要的消息。
 - 普通闲聊和时间问题跳过 Memory Agent，减少延迟、Token 和无关记忆污染。
 - Relationship Overview 只在关系/回忆需要时进入记忆上下文，不再每轮全量注入。
 - `Friend.memory` 保留为兼容缓存和管理视图，但不再整段塞入系统提示词。
 - 检索结果先跨来源去重，再重排和压缩，控制最终证据数量与字符预算。
-- **优雅降级**：Supervisor 分类、Query Rewriter、摘要压缩和 Emotion 分析各自有确定性兜底——LLM 不可用或返回非法格式时，回退到关键词路由 / 原文截断 / neutral 情绪，图不会因为单个环节失败而中断。
+- **优雅降级**：Supervisor 分类、Query Rewriter、摘要压缩和 Emotion 分析各自有确定性兜底——LLM 不可用或返回非法格式时，分类器回退到“按最宽模式检索一次”，其余回退到原文截断 / neutral 情绪，图不会因为单个环节失败而中断。
 - 图片 Base64 不进入 Supervisor、Memory Agent、Emotion Agent 或普通 Trace，只进入最终视觉模型调用。
 
-### 4. 混合意图路由与 Multi-Agent 编排
-
-Supervisor 使用“确定性规则优先、LLM 处理歧义”的混合路由：
+### 4. 多标签意图分类与 Multi-Agent 编排
 
 | Agent | 职责 |
 | --- | --- |
-| Supervisor | 区分闲聊、时间、稳定记忆、具体回忆和情绪需求 |
+| Supervisor | 一次调用判两个**互相独立**的标签：`has_emotion`（要不要情绪回应）和 `memory_kind`（`none` / `recall` / `fact`） |
 | Memory Agent | 时间范围定位、Semantic Memory、统一原文检索、话题补充、重排压缩 |
 | Emotion Agent | 识别情绪类型、强度和建议语气，只输出结构化状态 |
 | Conversation Agent | 汇总唯一 System Prompt，生成符合角色风格的结构化气泡数组 |
 
-明确问题通过关键词和时间信号零额外延迟路由；“算了”“没事”“你忙吧”或含 emoji 的歧义表达才交给 LLM 分类（DeepSeek，20s 超时，失败回退 chat）。这样兼顾可解释性、成本和召回准确率。
+**为什么是多标签**：意图本来就不是单选。“上次吵架我好难过”同时需要情绪回应和历史检索，单标签分类器必然丢掉一半。两个标签独立后，Memory Agent 和 Emotion Agent 由 LangGraph 并行扇出，在同一个 superstep 内跑完，而不是串成一条链。
 
-**意图继承**：短消息（≤24 字符，如“还有呢？”“哈哈”）本身不携带意图，直接继承上一轮已分类的意图（上一轮的 `supervisor_intent` 持久化在 `Message.reply_provenance` 上），省掉每轮一次 LLM 分类调用；只有“迪士尼呢？”“你去翻”这类带指代线索的短问，或“算了”等转移信号，才重新走 LLM 分类。
+```mermaid
+flowchart LR
+    S["Supervisor"] -->|memory_kind ≠ none| M["Memory Agent"]
+    S -->|has_emotion| E["Emotion Agent"]
+    S -->|都为假| C["Conversation Agent"]
+    M --> C
+    E --> C
+```
+
+**快速通道**：只由标点和空白组成的消息（Unicode 类别 `P*` / `Z*`，如“？”“……”）确定没有可回应内容，直接判为两个标签都为假，省掉一次 LLM 调用。这里刻意不用「不含汉字/字母/数字」这种字符白名单——那样裸的 💔 会被当成无信息量消息吞掉，而且失败是静默的（`classification_source` 记的还是看着最健康的 `fast_path`）。带 emoji 语义的消息一律过分类器。
+
+**失败开放（fail-open）**：分类器不可用时不能判成“不需要记忆”——那等于让用户在一次故障中永久损失一次回忆。降级结果为 `memory_kind=recall`、`has_emotion=false`（情绪分析本身也是一次 LLM 调用，分类器连不上它大概率也连不上，重试只是叠加延迟），并按最宽的模式检索一次。`classification_source` 记录本轮判定来自 `fast_path` / `llm` / `fallback`，随回复溯源一起持久化。
+
+分类器超时定为 5s（`CLASSIFIER_TIMEOUT`）——它从“偶发调用”变成“每条消息都调用”之后，原先 20s 的最坏情况不再可接受。
+
+**关于“还有呢”这类短消息**：省略指代由分类器提示词里的最近对话来理解，每轮重新分类，不做跨轮意图继承。多一次调用的代价与取舍见 [`docs/superpowers/specs/2026-09-21-supervisor-intent-refactor-design.md`](docs/superpowers/specs/2026-09-21-supervisor-intent-refactor-design.md) §6。
 
 ### 5. 可恢复的聊天预处理 Pipeline
 
@@ -197,8 +210,9 @@ Conversation Agent 输出 `{"bubbles": [...]}`，前端按数组逐条渲染。�
 - Reflection 采用持久日级任务、唯一约束、原子抢占、失败重试和超时任务恢复。
 - 在线聊天原文永久保留；摘要、胶囊、Semantic Memory 和 LanceDB 都是可重建的派生层。
 - **失败不静默**：图执行或供应商异常通过 SSE error 事件透出到前端（“AI 回复生成失败，请重试”），不再吞掉错误；空回复或失败回复不落库，避免污染后续上下文。
-- **回复溯源**：每条回复持久化 `reply_provenance`（本轮回溯到哪些摘要、胶囊、原文证据，以及 `supervisor_intent`），前端可查看，后端可审计。
+- **回复溯源**：每条回复持久化 `reply_provenance`（本轮回溯到哪些摘要、胶囊、原文证据，以及 `supervisor_decision`——两个标签的值加上判定来源 `fast_path` / `llm` / `fallback`），前端可查看，后端可审计。
 - **并发安全**：回复落库与清空历史之间用行锁 + 代际号（`online_history_generation`）保证原子性；滚动折叠按好友串行化，检查点不会并发回退。
+- **工作线程的连接自己关**：图节点跑在 LangGraph 的工作线程上，而 Django 的连接是线程局部的、只有请求线程会收到 `request_finished` 信号——`CONN_MAX_AGE=0` 那句「每个请求结束就关掉」在这条线程上是空话。Memory Agent 用 `try/finally` 自行释放连接，异常路径同样释放。
 - 提供聊天文本脱敏工具，可识别密码、身份证号及自定义敏感前缀，且不修改原文件。
 - 可选 LangSmith Trace 覆盖路由、检索、压缩、最终 Prompt、预处理和 Reflection。
 
@@ -365,7 +379,7 @@ uv run python manage.py run_reflection_jobs
 
 - 设计统一 Conversation History Search，在不合并底层表的前提下统一检索微信原文和后续 AI 原始对话。
 - 设计“滚动摘要 + 最近原文 + 按意图检索证据”的上下文工程：32K/40K 软硬预算、CJK 估算、意图加权分配和阶段胶囊，减少系统 Prompt 重复和无关记忆注入。
-- 混合意图路由 + 意图继承：关键词零延迟快路径、歧义才 LLM 分类、短消息继承上轮意图，省掉每轮分类调用。
+- 把单标签关键词路由重构为多标签 LLM 分类：一次调用判出两个独立标签，节点由串行改为并行扇出；标点/空白消息走确定性快路径，分类失败按最宽模式 fail-open 并记录判定来源。
 - 将 2.3 万条聊天切分为 304 个可恢复 Analysis Chunk，支持并发处理、失败重试、partial 状态和断点续跑。
 - 设计带时间状态、可变性、锁定、证据引用与相对时间锚定守卫的 Semantic Memory，解决重复事实和新旧事实冲突。
 - 构建 DeepSeek 文本 + GLM 视觉 + DashScope 语音链路，支持图片理解、流式 TTS 和即时通讯式多气泡交互。
@@ -383,7 +397,7 @@ cd frontend && npm run build
 RUN_LLM_INTEGRATION_TESTS=1 uv run pytest -m llm_integration
 ```
 
-测试覆盖 Agent 路由、记忆隔离、统一历史检索、上下文摘要、Reflection 并发、预处理 Chunk、LanceDB 索引、结构化气泡、图片上传与隐私控制。
+测试覆盖多标签路由与判定来源、记忆隔离、统一历史检索、上下文摘要、Reflection 并发、预处理 Chunk、LanceDB 索引、结构化气泡、图片上传与隐私控制。
 
 提交代码前请确认以下本地数据没有进入 Git：
 

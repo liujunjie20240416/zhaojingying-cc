@@ -44,7 +44,7 @@
 1. **四层记忆体系**（为什么分层、谁是权威、派生层怎么重建）
 2. **统一历史检索**（中文 FTS5 分词方案、向量混合检索、去重重排压缩）
 3. **上下文工程**（软硬预算、CJK 估算、滚动折叠、意图驱动检索）
-4. **混合意图路由 + 多 Agent 编排**（规则优先、LLM 兜底、意图继承省调用）
+4. **多标签意图分类 + 多 Agent 编排**（一次调用判两个独立标签、并行扇出、fail-open 降级）
 5. **可恢复预处理 Pipeline**（聊天日、Chunk、双指纹断点、partial 语义）
 6. **Style Profile**（从角色本人消息学习说话风格）
 7. **多模态与语音**（图片走 GLM、ASR/TTS、前端气泡渲染）
@@ -61,10 +61,10 @@
 ```mermaid
 flowchart LR
     UI["Vue 3 Web / Mobile UI"] --> API["FastAPI API (SSE/WS)"]
-    API --> SUP["LangGraph Supervisor"]
-    SUP -->|普通闲聊 / 时间| CONV["Conversation Agent"]
-    SUP -->|回忆 / 稳定事实| MEM["Memory Agent"]
-    SUP -->|强情绪 / 歧义| EMO["Emotion Agent"]
+    API --> SUP["LangGraph Supervisor<br/>多标签分类"]
+    SUP -->|memory_kind ≠ none| MEM["Memory Agent"]
+    SUP -->|has_emotion| EMO["Emotion Agent"]
+    SUP -->|都为假| CONV["Conversation Agent"]
     MEM --> CONV
     EMO --> CONV
     CONV -->|文字| LLM["LLM (默认 DeepSeek V4 Pro)"]
@@ -92,14 +92,16 @@ flowchart LR
 POST /api/friend/message/chat/（JWT Bearer 鉴权 → 校验 friend 归属 → 附件校验）
   │
   ▼
-组装上下文：角色设定 + Style Profile + 最近原文 + 滚动摘要 + 上一轮意图
+组装上下文：角色设定 + Style Profile + 最近原文 + 滚动摘要
   │
   ▼
 LangGraph 执行（在 TTS WebSocket 会话内异步运行）：
-  1. Supervisor 路由：关键词规则 → 必要时 LLM 分类（20s 超时）
-     - 闲聊/时间 → Conversation Agent（普通闲聊不查记忆，省 token）
-     - 回忆/记忆 → Memory Agent（语义事实 + 原文证据检索 + 重排压缩）
-     - 强情绪 → Emotion Agent（输出情绪强度与建议语气，再回 Conversation）
+  1. Supervisor 分类：一次 LLM 调用判两个互相独立的标签（5s 超时）
+     - memory_kind = recall / fact → Memory Agent（语义事实 + 原文证据检索 + 重排压缩）
+     - has_emotion = true → Emotion Agent（输出情绪强度与建议语气）
+     - 两个都为假 → 直接进 Conversation Agent（闲聊不查记忆，省 token）
+     - memory 与 emotion 同时为真时并行扇出，同一步跑完再汇合
+     - 只由标点/空白组成的消息走确定性快路径，不调 LLM
   2. Conversation Agent：按 token 预算拼装最终 System Prompt
      - 有图片 → 走 GLM 视觉模型；否则走文本 LLM（DeepSeek）
      - 输出 {"bubbles": [...]} 结构化多气泡 JSON
@@ -223,7 +225,7 @@ uv run python manage.py run_reflection_jobs --watch                    # 常驻�
 
 1. **Token 预算**（`context_budget.py`）：SOFT 32K / HARD 40K 两级；内置 CJK 估算器 `ceil(0.9×汉字数 + 非汉字/3.2)`（中文 token 密度高于英文，刻意保守）；上一轮 provider 真实 usage 作为校准锚点；按意图权重分配各记忆区块预算，逐区块截断，越界留 marker 标注。
 2. **滚动折叠**：未摘要的 Online Chat 超过 9000 token 时触发压缩——按 8000 字符分批，每批 LLM 生成"工作摘要 + 阶段胶囊"，推进 `summary_through_message_id` 检查点；保留最近 10 轮原文（≤6000 token）。折叠失败降级为有界原文投影，**绝不丢消息**。
-3. **意图驱动**：普通闲聊和时间问题跳过 Memory Agent（省延迟、省 token、防无关记忆污染）；只有回忆/记忆类问题才进检索链路。
+3. **意图驱动**：闲聊直接走 conversation，不查记忆（省延迟、省 token、防无关记忆污染）；只有分类器判出 `recall` / `fact` 才进检索链路。
 
 **为什么**：LLM 上下文窗口有限且贵。真正的工程问题不是"塞得下多少"，而是"该塞什么、不该塞什么"——记忆不是越多越好，错误/过期的记忆会直接污染生成。
 
@@ -231,28 +233,36 @@ uv run python manage.py run_reflection_jobs --watch                    # 常驻�
 - "估算器不准怎么办？" → 估算只用于决策（截断阈值），真实 usage 随 context_diagnostics 下发展示；soft/hard 双阈值给估算误差留了缓冲。
 - "为什么保留最近原文而不是全摘要？" → 原文保真度最高，摘要再准也是损失信息后的产物；两者结合：近的用原文，远的用胶囊定位。
 
-## C5. 混合意图路由 + 多 Agent 编排（LangGraph）
+## C5. 多标签意图分类 + 多 Agent 编排（LangGraph）
 
-**是什么**：一张 LangGraph 图，四个节点：`supervisor → memory / emotion / conversation`。
+**是什么**：一张 LangGraph 图，四个节点。Supervisor 一次 LLM 调用判出两个**互相独立**的标签——`has_emotion`（要不要情绪回应）和 `memory_kind`（`none` / `recall` / `fact`），路由图据此决定进哪些节点。
 
-**图结构**：
-- `supervisor` 条件路由：emotional → emotion；recall/memory 或轻量回忆信号 → memory；否则 conversation（**time 意图也直接走 conversation**，不查记忆）。
-- `memory` 之后：若 emotion 还没跑，再扫强情绪信号命中则去 emotion。
-- `emotion` 之后：若 memory 还没跑且意图是回忆 → 去 memory。
+**先说为什么改（这是这道题的重点）**：最初的版本是单标签关键词路由——一串关键词表判出 `intent` ∈ {chat, time, recall, memory, emotional}，命中关键词零延迟，只有歧义（"算了""没事""你忙吧"）才花一次 LLM 分类；短消息（≤24 字符）还做了**意图继承**，直接复用上一轮存在 `Message.reply_provenance` 里的 `supervisor_intent`，省掉一次调用。
 
-**Supervisor 路由规则（优先级从高到低）**：
-1. 关键词命中：20 个情绪词 → emotional；6 个时间词 → time；10 个回忆词 → recall；9 个记忆词 → memory
-2. 前端 emoji 语义非空 **或** 命中 12 个歧义词（"算了/没事/你忙吧"）→ LLM 分类（20s 超时，失败回退 chat）
-3. 短消息（≤24 字符）且有上一轮意图 → **意图继承**（省一次 LLM 调用）；含指代词（去/翻/找/还有呢）→ LLM；否则 chat
-4. 兜底 chat
+问题出在「单标签」这个前提本身就是错的：**意图不是单选**。"上次吵架我好难过"既需要情绪回应，也需要把那次吵架检索出来；任何单标签分类器都必然丢掉一半，而且丢哪一半取决于关键词表的排序——一个和后端产品逻辑无关的偶然因素。用户看到的是"它安慰了我，但完全不记得我们吵过什么"。
 
-**意图继承**：上一轮 `supervisor_intent` 持久化在 `Message.reply_provenance` 里，短消息直接继承——"还有呢？""哈哈"这类消息自己不带意图，省掉每轮一次 LLM 分类调用。
+**改成什么样**：
+- 一次调用同时回答两个问题，返回 `{"has_emotion": bool, "memory_kind": "none"|"recall"|"fact", "confidence": float}`。
+- 条件边返回**节点名列表**，LangGraph 在同一步（superstep）并行扇出 memory 和 emotion，两个都跑完再汇合进 conversation。原来 memory↔emotion 是双向串联、靠 `memory_done` / `emotion_done` 标志位防重复，现在这两个标志位连同整张边表一起删掉了。
+- 闲聊直接 `supervisor → conversation` 两个节点结束。
+- 意图继承一并移除：省略指代（"还有呢"）改由分类器提示词里的最近几轮对话来理解，每轮重新判。**这是明确的成本上升**（每条消息多一次分类调用），换的是"不再依赖上一轮的判断"。
 
-**为什么规则优先**：明确问题（"我喜欢吃什么？"）用关键词零额外延迟路由；只有歧义（"算了"）才花一次 LLM 调用。可解释、成本低、召回准确，且 LLM 挂了也不影响整轮。
+**快速通道（唯一保留的确定性规则）**：只由标点（Unicode 类别 `P*`）和空白（`Z*`）组成的消息（"？""……"）确定没有可回应内容，直接判两个标签都为假，不调 LLM。
+
+这里有个值得讲的坑：实现时差点用「不含汉字/字母/数字」的字符白名单来做这个判断，那样裸的 💔 会被判成"无信息量"吞掉——用户发一个心碎表情，得到的回应和发一个句号一样。**而且这个失败是静默的**：`classification_source` 记的还是看着最健康的 `fast_path`，事后根本查不出来。
+
+**fail-open 而不是 fail-closed**：分类器超时、返回非法 JSON 或空内容时，降级结果不是"不需要记忆"，而是 `memory_kind=recall` + `has_emotion=false`，按最宽的模式检索一次。理由：分类器挂了只该让这一轮变慢变贵，不该让用户在一次故障中**永久损失一次回忆**。`has_emotion` 取 false 是因为情绪分析本身也是一次 LLM 调用，分类器连不上它大概率也连不上，重试只是叠加延迟。
+
+`classification_source` 记录判定来自 `fast_path` / `llm` / `fallback`，随 `reply_provenance` 落库——出问题时能直接分清"是分类器判错了"还是"分类器压根没连上"。
+
+**超时从 20s 改成 5s**：分类器从"偶发调用"变成"每条消息都调用"，20s 的最坏情况不再可接受。
+
+**一个 LangGraph 的行为细节（很好的加分项）**：LangGraph 会**静默丢弃**节点返回值里不在 state schema 里声明的键——不报错，只是丢掉。但它**会**把这些键传给紧邻下游的条件边路由函数。所以路由能看见一个最终状态里并不存在的字段：路由逻辑是对的，而 `api/chat.py` 从最终结果里回读该字段拿到的是默认值。这个差异是实测确认的，不是读文档猜的。
 
 **追问应对**：
-- "为什么用 LangGraph 不用自写状态机？" → 条件边天然表达路由逻辑、节点状态可调试、支持持久化，省去自造轮子；图结构本身也便于演进（加节点/加边）。
-- "多 Agent 会不会反而慢？" → 快路径（闲聊）只走 supervisor→conversation 两个节点；记忆链路只在需要时触发。
+- "为什么用 LangGraph 不用自写状态机？" → 条件边返回列表就能表达并行扇出，自己写要手搓调度和汇合；节点状态可调试、支持持久化；图结构便于演进（加节点/加边）。
+- "多 Agent 会不会反而慢？" → 闲聊只走 supervisor→conversation 两个节点；记忆和情绪链路只在需要时触发，且两者同时需要时是并行而不是串联。
+- "关键词表不是更省钱吗？" → 省钱但判不准，而且判错的代价不对称：闲聊多检索一次只是多花点 token，漏掉一次回忆是用户直接感知到的产品缺陷。
 
 ## C6. 可恢复的预处理 Pipeline
 
@@ -363,13 +373,13 @@ prompt 规则明确：情绪化自嘲/抱怨/自我贬低（"一穷二白""啥�
 ## 五、多 Agent 与意图
 
 **Q18：四个 Agent 各自干什么？为什么拆？**
-见 C5 表格。拆分理由：意图判断、记忆检索、情绪识别、生成各干各的，可独立替换（比如换检索策略不改生成）、独立预算（memory 区块按意图加权）、失败可独立兜底。
+见 C5 表格。拆分理由：意图判断、记忆检索、情绪识别、生成各干各的，可独立替换（比如换检索策略不改生成）、独立预算（memory 区块按检索时产出的意图权重分配）、失败可独立兜底。
 
-**Q19：意图路由为什么规则优先而不是全 LLM？**
-明确问题关键词零延迟零成本；LLM 只处理歧义；短消息意图继承再省一次调用。可解释 + 成本 + 失败可回退。
+**Q19：意图路由为什么从"规则优先"改成 LLM 多标签分类？**
+原来的规则优先版本是单标签的，而意图本身不是单选——"上次吵架我好难过"同时要情绪回应和历史检索，单标签必然丢一半，丢哪一半还取决于关键词表的排序。现在一次调用判两个独立标签，同时为真时 LangGraph 并行扇出。代价是每条消息多一次分类调用（原先短消息能继承上一轮意图省掉），换的是不再依赖上一轮的判断，省略指代改由提示词里的最近对话理解。超时也从 20s 收到 5s。
 
-**Q20：意图继承怎么防"继承错了"？**
-只继承三类记忆/情绪意图，chat 不继承；歧义词和 emoji 语义优先级高于继承；带指代线索的短消息重新走 LLM。
+**Q20：分类器挂了怎么办？**
+fail-open：降级成 `memory_kind=recall` + `has_emotion=false`，按最宽模式检索一次。关键是方向——分类器故障只该让这一轮变慢变贵，不该让用户**永久损失一次回忆**；反过来若降级成"不需要记忆"，一次故障就变成了产品缺陷。`has_emotion` 取 false 是因为情绪分析本身也是 LLM 调用，分类器连不上它大概率也连不上，重试只是叠加延迟。判定来源记在 `classification_source`（`fast_path` / `llm` / `fallback`）并随回复落库，事后能分清是判错了还是压根没连上。
 
 ## 六、可靠性、并发与数据一致性
 
@@ -417,7 +427,8 @@ pytest + pytest-django，覆盖：意图路由、记忆隔离、统一检索、�
 | 重导入时 LanceDB drop 失败被吞掉 | "旧向量残留" | 残留向量靠权限隔离 + 读取端回查校验兜底，不影响正确性，只是索引不干净 |
 | token 估算器是经验公式 | "估算不准" | 估算只用于决策，真实 usage 用于展示与校准；SOFT/HARD 双阈值给误差留缓冲 |
 | 单角色绑定单作者，多用户共享角色靠物化拷贝 | "数据冗余" | private/public 可见性模型决定：私有隔离优先，public 才共享（物化拷贝保证可见性切换可回滚） |
-| LLM 调用成本 | "每次回忆都检索+重排不便宜" | 意图路由把成本花在刀刃上：闲聊零检索；LLM 分类只处理歧义；重排候选 ≤8 时跳过 LLM |
+| LLM 调用成本 | "每轮都要分类、每次回忆都要检索+重排，不便宜" | 分层回答：闲聊仍然零检索；重排候选 ≤8 时跳过 LLM；标点/空白消息走确定性快路径。但要**主动承认分类调用从"偶发"变成了"每条"**——这是拿成本换掉了"意图单选"这个错误前提和跨轮意图继承的状态依赖。主动说出这笔账比被问出来好 |
+| 分类器判 `none` 时，`needs_lightweight_recall` 的兜底失效 | "指代性追问还会不会触发检索" | **主动承认这是一次真实的召回面收窄**：改造前 `route_from_supervisor` 在路由阶段把 `detect_memory_intent(...).get("needs_lightweight_recall")` 当 OR 条件用，所以「那个作业后来怎么样了」这类没有显式回忆词的消息**一定**进 memory 节点；改造后这个信号还在算，但它只能在 memory 节点**内部**起作用，分类器判 none 时该节点根本不跑。而且**目前没有测量手段**——标注集随"没有真实数据"一并推迟了。最小可用缓解是给分类器提示词的 recall 定义补一条"不需要显式回忆词的指代性追问" |
 
 ---
 
@@ -426,7 +437,7 @@ pytest + pytest-django，覆盖：意图路由、记忆隔离、统一检索、�
 ## 简历 bullet（可直接用）
 
 > **DeepEcho（千寻）｜Memory-Driven AI Companion｜个人全栈 AI 项目**
-> 基于 FastAPI、Django、Vue 3、LangGraph、DeepSeek + GLM 构建多模态 AI 陪伴应用。设计 Imported Chat / Online Chat / Semantic Memory / 滚动摘要+阶段胶囊四层记忆体系，通过 FTS5 + LanceDB 混合检索、Query Rewrite、时间锚定检索、Rerank 与 Context Compressor 实现跨来源证据召回。实现 2.3 万条真实聊天数据的并发 Map/Reduce 预处理（5 worker、Chunk Checkpoint 双指纹断点续跑、partial 状态、进度封顶），关系时间线与角色 Style Profile 自动学习。使用持久日级 Reflection 任务（条件 UPDATE CAS 抢占、30 分钟超时回收、代际号并发防线）、原子写入与软/硬上下文预算（32K/40K、CJK 估算器）保证长任务可靠性与上下文可控；支持图片理解（GLM）、流式 TTS（DashScope）、结构化多气泡 IM 式回复与移动端适配。
+> 基于 FastAPI、Django、Vue 3、LangGraph、DeepSeek + GLM 构建多模态 AI 陪伴应用。设计 Imported Chat / Online Chat / Semantic Memory / 滚动摘要+阶段胶囊四层记忆体系，通过 FTS5 + LanceDB 混合检索、Query Rewrite、时间锚定检索、Rerank 与 Context Compressor 实现跨来源证据召回。实现 2.3 万条真实聊天数据的并发 Map/Reduce 预处理（5 worker、Chunk Checkpoint 双指纹断点续跑、partial 状态、进度封顶），关系时间线与角色 Style Profile 自动学习。使用持久日级 Reflection 任务（条件 UPDATE CAS 抢占、30 分钟超时回收、代际号并发防线）、原子写入与软/硬上下文预算（32K/40K、CJK 估算器）保证长任务可靠性与上下文可控；支持图片理解（GLM）、流式 TTS（DashScope）、结构化多气泡 IM 式回复与移动端适配。将 LangGraph Supervisor 从单标签关键词路由重构为多标签 LLM 分类（一次调用判出两个互相独立的标签，记忆与情绪节点由串行改为并行扇出），并以确定性快路径 + fail-open 降级 + 判定来源落库保证可观测性。
 
 ## 口头讲述版（面试第一分钟）
 
@@ -448,8 +459,8 @@ pytest + pytest-django，覆盖：意图路由、记忆隔离、统一检索、�
 | 9000 token / 8000 字符 | 折叠触发阈值 / 每批折叠量 |
 | 最近 10 轮 / 6000 token | 折叠后保留的原文 |
 | ±5 条消息 | 导入命中消息的窗口扩展 |
-| ≤24 字符 | 意图继承的短消息阈值 |
-| 20s 超时 | Supervisor LLM 分类超时 |
+| 5s 超时 | Supervisor LLM 分类超时 |
+| 2 个标签 / 3 种来源 | Supervisor 输出（has_emotion + memory_kind）/ 判定来源（fast_path / llm / fallback） |
 | 5 worker / 120 条 / 10000 字符 / overlap 6 | 预处理并行度与 Chunk 上限 |
 | 30 分钟 / 3 次 | Reflection 超时回收 / 最大尝试 |
 | access 2h / refresh 7d | JWT 有效期 |
@@ -901,7 +912,7 @@ Conversation Agent 的思路是：
 | 记忆冲突怎么处理？ | 先区分主体和类别，再看是否可变；可变当前事实通过 replaces 转历史，新的成为 current；不可变/锁定事实不自动覆盖。 | 讲 trajectory_key 和 `replaced_by`。 |
 | 为什么“过去状态”不覆盖“当前状态”？ | “曾经在 A 学校”是不可逆经历，应追加；“目前在 B 学校”是当前状态，同维度变化才替换旧 current。 | 讲 identity 收窄和 preference/experience 时态分流。 |
 | 摘要错了怎么办？ | 摘要只是读取投影，原始 Message 不删除；可以从 checkpoint 重新折叠，回忆类问题还能查 collapse/raw。 | 讲失败 fallback 和 checkpoint。 |
-| 为什么不每轮都搜全部记忆？ | 延迟、成本和噪声都更高；Supervisor 先路由，闲聊走快路径，只有回忆/事实/隐含指代才检索。 | 讲短消息意图继承和歧义 LLM fallback。 |
+| 为什么不每轮都搜全部记忆？ | 延迟、成本和噪声都更高；Supervisor 先分类，闲聊直接走 conversation，只有 recall/fact 才进检索。 | 讲多标签分类、并行扇出和 fail-open 降级。 |
 | 32K 是怎么精确算出来的？ | 发请求前不是精确计算，而是保守估算；真正 usage 由 provider 返回并记录，soft/hard 留缓冲。 | 承认经验公式不是 tokenizer。 |
 | 5 个 worker 会不会让 LLM 乱序？ | Map 结果按 chunk_index 写入数组/checkpoint，完成顺序不影响最终按时间排序的 Reduce；写入前检查缺失和失败。 | 讲 source/chunk 双指纹。 |
 | 进程被杀怎么续跑？ | 每个成功 Chunk 的结果已持久化，重启后按 source_fingerprint + chunk_fingerprint 复用成功结果，只补缺失/失败 chunk。 | 讲 partial 状态与最多 5 个上下文补救重试。 |
