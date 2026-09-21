@@ -147,7 +147,7 @@ class TestSupervisorFastPath:
 
         called = {}
         monkeypatch.setattr(supervisor, "_classify_with_llm", lambda *a, **kw: (
-            called.setdefault("yes", True) or
+            called.update({"yes": True}) or
             {"has_emotion": True, "memory_kind": "none",
              "classification_source": "llm"}
         ))
