@@ -221,12 +221,16 @@ START → supervisor
 
 ### 测试
 
+> 下表是设计时的预判，实现后有三行对不上，已在 2026-09-21 的实现阶段修正为实际结果。
+> 改动集中在「删除」而不是「重写」——原因见每行后面那句。
+
 | 文件 | 处理 |
 |---|---|
-| `tests/test_agents.py` | 删除 4 个意图继承 / 短消息短路测试；重写 `test_route_chat_intent`、`test_route_recall_intent` 断言新字段 |
-| `tests/test_memory_refactor.py:366-368` | 重写 `delegate_to` / `intent` 断言 |
-| `tests/test_memory_refactor.py:616-627` | `test_emoji_context_uses_llm_supervisor` 改为断言 `classification_source == "llm"` |
-| `tests/test_memory_refactor.py:643-657` | `test_emotion_and_memory_each_run_at_most_once` 删除（标志已移除） |
+| `tests/test_agents.py` | 删除 4 个意图继承 / 短消息短路测试。**`test_route_chat_intent`、`test_route_recall_intent` 是删除，不是重写**：`route_from_supervisor` 现在读的是两个独立标签，重写后的路由测试只能断言「stub 返回什么就路由到什么」，即恒真式；真实覆盖改由 `test_route_matrix` 承担 |
+| `tests/test_agents.py` | **`test_create_supervisor_app` 也删除了**（原表未列）。它是 `llm_integration` 门控的，图结构覆盖已移到 `test_graph_topology_is_frozen` |
+| `tests/test_memory_refactor.py:366-368` | 重写为 `test_supervisor_labels_independent_of_keywords`。**该测试后被判定为恒真式并删除**（断言读回的是 stub 自己塞进 `_classify_with_llm` 的返回值）；覆盖由 `tests/test_agents.py:116 test_both_labels_returned` 承担 |
+| `tests/test_memory_refactor.py:616-627` | `test_emoji_context_uses_llm_supervisor` **删除，不是改断言**。它本来就新旧代码都绿，且 fixture 里的 `emotion_context` 是惰性的（裸 emoji 的 Unicode 类别过不了快速通道），名字承诺的豁免没被测到。真正测到的是 `tests/test_agents.py:32 test_emoji_context_forces_classifier` |
+| `tests/test_memory_refactor.py:643-657` | `test_emotion_and_memory_each_run_at_most_once` 删除（标志已移除）。同表原列的 `test_supervisor_graph_does_not_loop_for_emotional_recall` 也一并删除，活覆盖由 `test_both_labels_run_emotion_and_memory_then_conversation` 承担 |
 | `tests/test_memory_refactor.py:660+` | `test_supervisor_graph_does_not_loop_for_emotional_recall` 改为验证并行扇出：两个节点都执行 |
 | `tests/test_context_budget.py`、`tests/test_memory.py` | 不受影响（直接调用 `detect_memory_intent`，该模块保留） |
 
@@ -245,7 +249,7 @@ START → supervisor
 
 | 风险 | 说明 | 缓解 |
 |---|---|---|
-| **`needs_lightweight_recall` 兜底消失** | 现在 `supervisor_graph.py:88` 用关键词函数兜底「那个作业后来怎么样了」这类没有显式回忆词的消息。改造后完全依赖分类器 | 标注集中必须包含这类样本；若召回下降，在分类器提示词中补充示例 |
+| **`needs_lightweight_recall` 兜底消失（实现后复核：本表最大的一条，且**没有**缓解手段）** | 改造前 `route_from_supervisor` 在**路由阶段**把 `detect_memory_intent(...).get("needs_lightweight_recall")` 当 OR 条件用，所以「那个作业后来怎么样了」这类没有显式回忆词的消息**一定**会进 memory 节点。改造后这个信号还在算（`memory_agent.py:240`），但它只能在 memory 节点**内部**起作用——分类器判 `none` 时该节点根本不跑，那三个 OR 条件一个都到不了。所以这是一次真实的召回面收窄，不是等价改写 | 原计划写的是「标注集中必须包含这类样本」，但标注集已随 §7 一并推迟（没有真实数据），**该缓解目前不存在**。最小可用替代：给分类器提示词的 `recall` 定义补一条「不需要显式回忆词的指代性追问」，并在有数据前接受这是一处未测量的收窄 |
 | **每条消息多一次 LLM 调用** | 从「偶发」变成「每条」 | 快速通道兜住高频短消息；延迟与成本用标注集量化 |
 | **快速通道误判** | 「呵呵」「哦」这类词在不同语境下含义相反，初版白名单已刻意排除；但仍有残留风险 | 白名单保守起步，用标注集测量误判率后再调 |
 | **表外 emoji 无情绪回应** | 前端 `USER_EMOJI_MEANINGS` 是固定 18 项，💔/😔/😂 不在表里，到不了「emotion_context 非空」那条豁免。初版判定规则用字符白名单，会把裸的 💔 当成无信息量消息吞掉（详见 §3.2） | 判定改用 Unicode 类别（`P`/`Z`），已加回归测试 |

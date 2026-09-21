@@ -175,9 +175,11 @@ def _classify_with_llm(
             response_format={"type": "json_object"},
         )
         content = str(response.choices[0].message.content or "").strip()
-        # 空回复必须当成失败。若让它 fall through 到 json.loads("{}")，
-        # 会返回 {has_emotion: false, memory_kind: "none"} 且 source 记为
-        # "llm"——一个看起来完全健康的「不需要记忆」，实际什么都没判。
+        # 空回复必须当成失败，不能变成一次看起来健康的「不需要记忆」。
+        # 注意真正拦住它的是下一行的 json.loads：空串会抛 JSONDecodeError，同样落进
+        # 下面这个 except，结果一样是降级。这一行负责的是「降级原因说得清楚」——
+        # 没有它，trace 里的 _error 是一句 JSON 解析错误，看不出是模型压根没回内容。
+        # （.strip() 在这里，所以纯空白的回复到这一行时也已经和空串无异。）
         if not content:
             raise ValueError("classifier returned empty content")
         parsed = json.loads(content)

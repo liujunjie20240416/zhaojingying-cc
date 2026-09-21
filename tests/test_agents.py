@@ -1,5 +1,5 @@
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 
 class TestSupervisorFastPath:
@@ -232,8 +232,14 @@ class TestSupervisorClassifier:
             "has_emotion": True, "memory_kind": "recall", "classification_source": "llm",
         })
 
+        # 前面两轮是给最近对话用的：意图继承被删掉之后，「还有呢」这类省略指代的
+        # 短消息就靠 prompt 里的这段上下文理解（api/chat.py 的墓碑注释这么写的）。
         supervisor.supervisor_node({
-            "messages": [HumanMessage(content="上次吵架我好难过")],
+            "messages": [
+                HumanMessage(content="咱们哪一年认识的"),
+                AIMessage(content="我记不清了，我们去翻聊天记录吧"),
+                HumanMessage(content="上次吵架我好难过"),
+            ],
             "emotion_context": ["😭：难过、哭、情绪很重"],
             "trace_metadata": {"friend_id": 7},
         })
@@ -250,6 +256,11 @@ class TestSupervisorClassifier:
         assert "上次吵架我好难过" in prompt
         assert "memory_kind" in prompt
         assert "😭：难过、哭、情绪很重" in prompt
+        # 最近对话必须真的拼进 prompt（也就是真的发给模型的那串字），不只是
+        # 作为参数传给 _classify_with_llm——trace 里的 recent_dialogue 字段
+        # 传得对、prompt 里却没拼进去的话，指代照样理解不了。
+        assert "咱们哪一年认识的" in prompt
+        assert "翻聊天记录" in prompt
 
 
 class TestSupervisorFallback:
@@ -379,6 +390,9 @@ class TestSupervisorFallback:
 
         assert result["classification_source"] == "fallback"
         assert result["memory_kind"] == "recall"
+        # 降级本身由 json.loads("") 兜住也成立，所以这里钉的是那句 guard 真正
+        # 提供的部分：降级原因得写成「模型没回内容」，而不是一句 JSON 解析错误。
+        assert "empty content" in result["_error"]
 
     def test_garbage_confidence_does_not_discard_the_classification(self, monkeypatch):
         """confidence 脏不能让整条判断陪葬。"""
@@ -532,6 +546,9 @@ class TestSupervisorGraph:
         assert sorted(calls) == ["conversation", "emotion", "memory"]
         assert calls[-1] == "conversation"
         assert result["messages"][-1].content == "我记得"
+        # schema 里没声明的键会被 LangGraph 丢掉，这里端到端确认 classification_source
+        # 真的活着走到了 api/chat.py 要读它的地方（同上一条断言的 schema 检查）。
+        assert result["classification_source"] == "llm"
 
     def test_emotion_only(self, monkeypatch):
         app, calls = self._app_with_spies(
@@ -566,7 +583,14 @@ class TestSupervisorGraph:
         刻意写成精确集合——新增一条边（比如后续工具调用加的 tools 节点）
         必须是有意识的决定，而不是顺手漂进来的。
         """
-        from ai.agents.supervisor_graph import create_supervisor_app
+        from ai.agents.supervisor_graph import MultiAgentState, create_supervisor_app
+
+        # supervisor 的三个输出必须在 schema 里：LangGraph 会**静默丢弃**未声明的
+        # 键，少一个（比如 classification_source）不报错、不抛异常，只是 api/chat.py
+        # 读回来永远是 ""——spec §3.5 记的就是这个失败形态。
+        assert {"has_emotion", "memory_kind", "classification_source"} <= set(
+            MultiAgentState.__annotations__
+        )
 
         drawable = create_supervisor_app().get_graph()
         node_names = {"supervisor", "emotion", "memory", "conversation"}

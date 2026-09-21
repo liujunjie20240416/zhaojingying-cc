@@ -360,22 +360,26 @@ def test_failed_semantic_rebuild_keeps_previous_table(monkeypatch):
 
 
 def test_supervisor_labels_independent_of_keywords(monkeypatch):
-    """分类结果来自 LLM，不再由关键词表决定。"""
+    """每个标签都要经过分类器，没有任何关键词表能替它下判断。
+
+    断言的是分类器**收到**了哪条消息，而不是它的返回值：返回值是 stub 自己
+    编的，supervisor_node 原样传出来，读回来等于没测（test_agents.py 的
+    test_both_labels_returned 覆盖返回值本身）。给「你好呀」加一条关键词短路
+    或快速通道，这里会红——旧写法不会。
+    """
     from langchain_core.messages import HumanMessage
     from ai.agents import supervisor as module
 
-    monkeypatch.setattr(module, "_classify_with_llm", lambda *a, **kw: {
-        "has_emotion": False, "memory_kind": "none", "classification_source": "llm",
-    })
-    plain = module.supervisor_node({"messages": [HumanMessage(content="你好呀")]})
-    assert plain["has_emotion"] is False
-    assert plain["memory_kind"] == "none"
+    seen = []
+    monkeypatch.setattr(module, "_classify_with_llm", lambda user_msg, *a, **kw: (
+        seen.append(user_msg) or
+        {"has_emotion": False, "memory_kind": "none", "classification_source": "llm"}
+    ))
 
-    monkeypatch.setattr(module, "_classify_with_llm", lambda *a, **kw: {
-        "has_emotion": False, "memory_kind": "recall", "classification_source": "llm",
-    })
-    recall = module.supervisor_node({"messages": [HumanMessage(content="还记得第一次见面吗")]})
-    assert recall["memory_kind"] == "recall"
+    module.supervisor_node({"messages": [HumanMessage(content="你好呀")]})
+    module.supervisor_node({"messages": [HumanMessage(content="还记得第一次见面吗")]})
+
+    assert seen == ["你好呀", "还记得第一次见面吗"]
 
 
 def test_conversation_builds_one_system_message(monkeypatch):
@@ -686,6 +690,14 @@ def test_memory_kind_drives_retrieval_strategy(monkeypatch):
     module.memory_agent_node({**base, "memory_kind": "none"}, api_key="t", api_base="u")
     assert planned == [], "闲聊不该调 QueryRewriter"
     assert searched == [], "闲聊不该翻原文"
+
+    # key 整个缺席时（state.get 的默认值）必须与 "none" 同解：supervisor_graph
+    # 的路由函数用的也是 "none"，两边对「state 里没写」得给出同一个答案。
+    planned.clear()
+    searched.clear()
+    module.memory_agent_node(base, api_key="t", api_base="u")
+    assert planned == [], "缺席当 none：不该调 QueryRewriter"
+    assert searched == [], "缺席当 none：不该翻原文"
 
     module.memory_agent_node({**base, "memory_kind": "recall"}, api_key="t", api_base="u")
     assert len(planned) == 1, "recall 必须调 QueryRewriter"
