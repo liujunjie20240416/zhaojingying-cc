@@ -1265,3 +1265,50 @@ EOF
 ```
 
 ---
+
+---
+
+### Task 3 完成记录（2026-09-21）
+
+**状态：完成。** 提交为 `5173f2a`，其后的一轮补测为 `4c7feeb`。
+
+**实际改了什么**
+
+| 文件 | 改动 |
+|---|---|
+| `ai/agents/memory_agent.py` | `memory_kind` 提升为一个局部变量（默认 `"none"`），三处判断改读它 |
+| `api/chat.py` | provenance 改为从三个 state 字段拼装 `supervisor_decision`；删除意图继承的读取与三个 state 种子 |
+| `tests/test_memory_refactor.py` | 新增 `test_memory_kind_drives_retrieval_strategy`、`test_tts_sender_persists_supervisor_decision`；删除 `test_emoji_context_uses_llm_supervisor` |
+
+**与计划不符、且计划是错的地方**
+
+1. **计划给的测试 1b 永远不可能通过**。`memory_agent.py` 的原文检索有前置条件
+   `should_search_raw and (has_imported or has_online)`，而计划给的 state 既不造 `Message` 也不造
+   `ChatMessage`，所以 search 根本到不了——即使 `memory_kind` 改对了也还是 `assert 0 == 1`。
+   补一条 `Message.objects.create(...)` 之后才真正测到 `memory_kind`。这是计划的错，实现者发现并纠正了。
+2. **计划预测「`test_emoji_context_uses_llm_supervisor` 会因缺 `has_emotion` 失败」也是错的**。
+   它在改动前就是绿的（Task 1 之后 `supervisor_node` 本来就返回 `has_emotion`），而且它的 fixture 是惰性的。
+   最终是**删除**，不是重写，理由写在上面 Step 1 的正文里。
+3. **`api/chat.py` 的行号再次漂移**（Task 2 删了 5 行），已按内容重新定位。
+
+**三值设计一度没有被测到**
+
+第一版的 `test_memory_kind_drives_retrieval_strategy` 只覆盖 `none` / `recall`，而 docstring 却声称三个取值都覆盖了。
+代码质量评审把它和 `recall`/`fact` 的区别点找了出来：`search_semantic` 被 stub 成 `[]`，于是
+`semantic_reliable` 恒为 False，`recall` 与 `fact` 的观测结果**完全一样**——把 `and not semantic_reliable`
+整个删掉，测试照样全绿。也就是说，一个布尔版本的 `has_memory` 能通过全部三个分支。
+现在补了「语义记忆可靠」的一组：`fact` 不翻原文、`recall` 照翻，两者只在标签上不同，这条是布尔实现过不去的。
+
+**最终评审（31 处变异，23 处被抓）之后补的 5 处**
+
+`4c7feeb` 里补的都是「有行为、但没有任何测试能证伪」的点：`classification_source` 的 schema 成员资格、
+最近对话是否真的进了分类器提示词、`memory_agent` 的缺省值、以及一条**恒真式**测试
+（`test_supervisor_labels_independent_of_keywords` 的断言读回的是 stub 自己塞进去的值，
+把 `supervisor_node` 里的 `has_emotion` 硬编码成 False 之后整个文件仍然全绿）。
+
+**没有解决、需要人决定的**
+
+`needs_lightweight_recall` 以前是**路由阶段**的 OR 条件，现在只在 memory 节点内部起作用，
+而分类器判 `none` 时该节点根本不跑——这是一次真实的召回面收窄。设计上就是这么定的（spec §6 原文：
+「改造后完全依赖分类器」），但 spec 承诺的缓解手段是「标注集里包含这类样本」，而标注集已随 §7 推迟。
+已在 spec §6 里如实标注为「无缓解」。**要不要把关键词兜底加回路由，是一个产品决定，没有替用户做。**

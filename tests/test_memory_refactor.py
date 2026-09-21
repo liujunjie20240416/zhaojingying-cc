@@ -362,10 +362,11 @@ def test_failed_semantic_rebuild_keeps_previous_table(monkeypatch):
 def test_supervisor_labels_independent_of_keywords(monkeypatch):
     """每个标签都要经过分类器，没有任何关键词表能替它下判断。
 
-    断言的是分类器**收到**了哪条消息，而不是它的返回值：返回值是 stub 自己
-    编的，supervisor_node 原样传出来，读回来等于没测（test_agents.py 的
-    test_both_labels_returned 覆盖返回值本身）。给「你好呀」加一条关键词短路
-    或快速通道，这里会红——旧写法不会。
+    断言的一半是分类器**收到**了哪条消息：给「你好呀」加一条关键词短路或快速
+    通道，`seen` 会红。另一半是分类器的答案没有被**事后改写**——stub 对含
+    「记得」的消息故意返回 "fact"，也就是关键词表会给出的 "recall" 的反面，
+    所以「记得 → recall」这类规则一旦绕过分类器生效，断言就会红。
+    返回值的常规覆盖在 test_agents.py:test_both_labels_returned。
     """
     from langchain_core.messages import HumanMessage
     from ai.agents import supervisor as module
@@ -373,13 +374,21 @@ def test_supervisor_labels_independent_of_keywords(monkeypatch):
     seen = []
     monkeypatch.setattr(module, "_classify_with_llm", lambda user_msg, *a, **kw: (
         seen.append(user_msg) or
-        {"has_emotion": False, "memory_kind": "none", "classification_source": "llm"}
+        {
+            "has_emotion": False,
+            "memory_kind": "fact" if "记得" in user_msg else "none",
+            "classification_source": "llm",
+        }
     ))
 
-    module.supervisor_node({"messages": [HumanMessage(content="你好呀")]})
-    module.supervisor_node({"messages": [HumanMessage(content="还记得第一次见面吗")]})
+    plain = module.supervisor_node({"messages": [HumanMessage(content="你好呀")]})
+    retrospective = module.supervisor_node({
+        "messages": [HumanMessage(content="还记得第一次见面吗")]
+    })
 
     assert seen == ["你好呀", "还记得第一次见面吗"]
+    assert plain["memory_kind"] == "none"
+    assert retrospective["memory_kind"] == "fact", "分类器的答案就是答案，关键词表不能推翻它"
 
 
 def test_conversation_builds_one_system_message(monkeypatch):
