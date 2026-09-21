@@ -141,6 +141,42 @@ class TestSupervisorFastPath:
 
         assert result["classification_source"] == "fast_path"
 
+    def test_emoji_outside_frontend_table_still_reaches_classifier(self, monkeypatch):
+        """表外 emoji 不能被当成无信息量消息吞掉。
+
+        emotion_context 由前端那张固定的 18 项表生成，💔/😔/😂 都不在表里，
+        所以它们到不了「emotion_context 非空」那条豁免。若判定用字符白名单，
+        裸的 💔 会因为不含汉字/字母/数字而走快速通道 → has_emotion=False →
+        用户发一个心碎的表情，什么情绪回应都得不到。
+        """
+        from ai.agents import supervisor
+
+        captured = []
+        monkeypatch.setattr(supervisor, "_classify_with_llm", lambda *a, **kw: (
+            captured.append(a[0]) or
+            {"has_emotion": True, "memory_kind": "none", "classification_source": "llm"}
+        ))
+
+        for emoji in ("💔", "😔", "😂"):
+            supervisor.supervisor_node({"messages": [HumanMessage(content=emoji)]})
+
+        assert captured == ["💔", "😔", "😂"], "表外 emoji 必须走分类器"
+
+    def test_fullwidth_alphanumerics_reach_classifier(self, monkeypatch):
+        """全角字母数字同样不含 [A-Za-z0-9]，不能走快速通道。"""
+        from ai.agents import supervisor
+
+        captured = []
+        monkeypatch.setattr(supervisor, "_classify_with_llm", lambda *a, **kw: (
+            captured.append(a[0]) or
+            {"has_emotion": False, "memory_kind": "recall", "classification_source": "llm"}
+        ))
+
+        for text in ("ｈｅｌｌｏ", "１２３"):
+            supervisor.supervisor_node({"messages": [HumanMessage(content=text)]})
+
+        assert captured == ["ｈｅｌｌｏ", "１２３"], "全角字母数字必须走分类器"
+
     def test_emoji_context_forces_classifier(self, monkeypatch):
         """带 emoji 语义的消息必须过分类器——快速通道看不见 emoji。"""
         from ai.agents import supervisor
@@ -205,10 +241,13 @@ class TestSupervisorClassifier:
         monkeypatch.setattr(supervisor, "_classify_with_llm", fake_classify)
         Msg = type("msg", (), {})
         earlier_user = Msg()
+        earlier_user.type = "human"
         earlier_user.content = "咱们哪一年认识的"
         earlier_ai = Msg()
+        earlier_ai.type = "ai"
         earlier_ai.content = "我记不清了，我们去翻聊天记录吧"
         follow_up = Msg()
+        follow_up.type = "human"
         follow_up.content = "你去翻，翻完跟我说"
 
         result = supervisor.supervisor_node({"messages": [earlier_user, earlier_ai, follow_up]})
@@ -217,6 +256,35 @@ class TestSupervisorClassifier:
         assert "咱们哪一年认识的" in captured["dialogue"]
         assert "翻聊天记录" in captured["dialogue"]
         assert captured["msg"] == "你去翻，翻完跟我说"
+
+    def test_tool_message_is_not_user_input(self, monkeypatch):
+        """ToolMessage 不能被当成用户消息。
+
+        这是 I3 真正要防的那种输入。带 tool_calls 的 AIMessage 测不出来——
+        它本来就带 tool_calls 属性，旧的 `hasattr(msg, "tool_calls")` 判定会
+        **碰巧**跳过它，于是测试对着旧代码也是绿的（写错过一次，见下）。
+        ToolMessage 两个属性都没有，旧实现会把它读成用户消息。
+        """
+        from ai.agents import supervisor
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        captured = {}
+
+        def fake_classify(user_msg, *a, **kw):
+            captured["msg"] = user_msg
+            return {"has_emotion": False, "memory_kind": "recall", "classification_source": "llm"}
+
+        monkeypatch.setattr(supervisor, "_classify_with_llm", fake_classify)
+        result = supervisor.supervisor_node({"messages": [
+            HumanMessage(content="你还记得那次旅行吗"),
+            AIMessage(content="我查一下", tool_calls=[
+                {"name": "search", "args": {}, "id": "call_1"},
+            ]),
+            ToolMessage(content="搜索结果：2023年去过京都", tool_call_id="call_1"),
+        ]})
+
+        assert captured["msg"] == "你还记得那次旅行吗"
+        assert result["memory_kind"] == "recall"
 
     def test_empty_message_yields_no_op_decision(self):
         from ai.agents import supervisor
@@ -317,7 +385,7 @@ Expected：FAIL —— `ImportError` / `AttributeError`（`has_emotion` 还不�
 """
 
 import json
-import re
+import unicodedata
 
 from openai import OpenAI
 
@@ -333,8 +401,10 @@ LIGHTWEIGHT_ACKS = frozenset({
     "哈哈", "哈哈哈", "嘿嘿", "早", "晚安", "在吗",
 })
 
-# 判断「消息是否只有符号」用：含汉字/字母/数字就算有内容。
-_CONTENT_CHAR = re.compile(r"[一-鿿A-Za-z0-9]")
+# 「这条消息有没有可回应的内容」用 Unicode 类别判定：只由标点（P*）和
+# 空白（Z*）组成就算没有。不能用「不含汉字/字母/数字」的字符白名单——
+# 那样裸的 💔 会被当成无信息量消息吞掉，详见 _is_contentless 的注释。
+_CONTENTLESS_CATEGORIES = frozenset("PZ")
 
 # 分类器从「偶发调用」变成「每条消息都调用」，20s 的最坏情况不再可接受。
 CLASSIFIER_TIMEOUT = 5
@@ -353,47 +423,75 @@ def _no_op_decision(source: str) -> dict:
 def _last_user_msg(state: dict) -> str:
     """取最后一条用户消息。
 
-    AIMessage 带 tool_calls 属性（即使为空），据此跳过；HumanMessage 没有。
+    按 LangChain 的 `type` 判定，而不是「有没有 tool_calls 属性」：AIMessage
+    与 ToolMessage 都不该被当成用户输入，而 `hasattr(msg, "tool_calls")` 只是
+    一个恰好成立的巧合——工具调用落地后 ToolMessage 进入状态，这条会读错。
     """
     for msg in reversed(state.get("messages", []) or []):
-        if hasattr(msg, "content") and not hasattr(msg, "tool_calls"):
+        if isinstance(msg, dict):
+            if msg.get("role") == "user":
+                return msg.get("content", "") or ""
+        elif getattr(msg, "type", "") == "human":
             return getattr(msg, "content", "") or ""
-        if isinstance(msg, dict) and msg.get("role") == "user":
-            return msg.get("content", "") or ""
     return ""
 
 
-def _is_lightweight_ack(user_msg: str) -> bool:
+def _is_contentless(user_msg: str) -> bool:
+    """消息是否只有标点或空白——没有可回应的内容。
+
+    用 Unicode 类别而不是字符白名单。字符白名单（`[一-鿿A-Za-z0-9]`）会漏掉
+    表外 emoji：『💔』不含任何「内容字符」，于是被判成无信息量、走快速通道、
+    has_emotion=False，用户得不到情绪回应。而且这个失败是静默的——
+    classification_source 记的是 fast_path，看起来是最健康的那个值。
+    """
     text = user_msg.strip()
     if text in LIGHTWEIGHT_ACKS:
         return True
-    return len(text) <= 8 and not _CONTENT_CHAR.search(text)
+    if len(text) > 8:
+        return False
+    return all(unicodedata.category(ch)[0] in _CONTENTLESS_CATEGORIES for ch in text)
 
 
 def supervisor_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
     """把这一轮判成 has_emotion + memory_kind，两个标签互相独立。"""
     user_msg = _last_user_msg(state)
+    # 其余 agent 的 record_trace 都带 trace_metadata（friend_id / character_id /
+    # entrypoint），supervisor 不带就会变成游离的、筛不出来的 span。
+    trace_metadata = state.get("trace_metadata", {})
+    emotion_context = state.get("emotion_context") or []
 
     if not user_msg:
         result = _no_op_decision("empty")
-        record_trace("supervisor.route", {"user_msg": user_msg}, result)
+        record_trace("supervisor.route", {"user_msg": user_msg}, result, metadata=trace_metadata)
         return result
-
-    emotion_context = state.get("emotion_context") or []
 
     # 快速通道只处理「确定没有信息量」的消息。emoji 语义是快速通道看不见的
     # 情绪信号，所以带 emotion_context 的消息一律过分类器。
-    if not emotion_context and _is_lightweight_ack(user_msg):
+    if not emotion_context and _is_contentless(user_msg):
         result = _no_op_decision("fast_path")
-        record_trace("supervisor.route", {"user_msg": user_msg}, result)
+        record_trace("supervisor.route", {"user_msg": user_msg}, result, metadata=trace_metadata)
         return result
 
     recent_dialogue = _recent_dialogue(state.get("messages", []))
     result = _classify_with_llm(user_msg, emotion_context, api_key, api_base, recent_dialogue)
+    trace_inputs = {
+        "model": llm_model(),
+        "user_msg": user_msg,
+        "emotion_context": emotion_context,
+        "recent_dialogue": recent_dialogue,
+        "messages": [{"role": "user", "content": _build_classifier_prompt(
+            user_msg, emotion_context, recent_dialogue)}],
+    }
+    # 降级那一轮最该被复盘——「降级率突然涨了」是唯一一个能自己冒出来的信号，
+    # 但只看 classification_source 不知道涨在哪：超时？JSON 烂？鉴权挂了？
+    if result.get("_error"):
+        trace_inputs["error"] = result["_error"]
     record_trace(
         "supervisor.route",
-        {"user_msg": user_msg, "emotion_context": emotion_context},
+        trace_inputs,
         result,
+        run_type="llm",
+        metadata=trace_metadata,
     )
     return result
 
@@ -412,6 +510,24 @@ def _recent_dialogue(messages: list, limit: int = 4) -> str:
     return "\n".join(lines)
 
 
+def _build_classifier_prompt(user_msg: str, emotion_context: list, recent_dialogue: str) -> str:
+    """单独成函数：supervisor_node 要把它原样记进 trace，供事后逐条复盘。"""
+    return f"""判断这条伴侣聊天消息需要哪些处理，只输出 JSON。
+最近对话（可能为空；用于理解省略的指代，不要把它当用户当前问题）：
+{recent_dialogue or "（无）"}
+用户消息：{user_msg}
+前端识别到的 emoji 含义：{json.dumps(emotion_context, ensure_ascii=False)}
+
+{{"has_emotion": false, "memory_kind": "none", "confidence": 0.0}}
+
+has_emotion：是否需要情绪回应——用户在表达情绪、需要安慰或共情，或者 emoji 带有情绪含义。两个判断互相独立，可以同时为真。
+memory_kind：
+  recall = 询问过去具体发生过的事、说过的原话（"上次""那次""你还记得"）
+  fact   = 询问稳定的身份、偏好、习惯或关系（"我喜欢什么""我们是什么关系"）
+  none   = 不需要翻记忆
+confidence：你对上述判断的把握，0 到 1。"""
+
+
 def _classify_with_llm(
     user_msg: str,
     emotion_context: list,
@@ -426,38 +542,46 @@ def _classify_with_llm(
             base_url=api_base or llm_api_base(),
             timeout=CLASSIFIER_TIMEOUT,
         )
-        prompt = f"""判断这条伴侣聊天消息需要哪些处理，只输出 JSON。
-最近对话（可能为空；用于理解省略的指代，不要把它当用户当前问题）：
-{recent_dialogue or "（无）"}
-用户消息：{user_msg}
-前端识别到的 emoji 含义：{json.dumps(emotion_context, ensure_ascii=False)}
-
-{{"has_emotion": false, "memory_kind": "none", "confidence": 0.0}}
-
-has_emotion：是否需要情绪回应——用户在表达情绪、需要安慰或共情，或者 emoji 带有情绪含义。两个判断互相独立，可以同时为真。
-memory_kind：
-  recall = 询问过去具体发生过的事、说过的原话（"上次""那次""你还记得"）
-  fact   = 询问稳定的身份、偏好、习惯或关系（"我喜欢什么""我们是什么关系"）
-  none   = 不需要翻记忆
-confidence：你对上述判断的把握，0 到 1。"""
         response = client.chat.completions.create(
             model=llm_model(),
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": _build_classifier_prompt(
+                user_msg, emotion_context, recent_dialogue)}],
             temperature=0,
             max_tokens=120,
             response_format={"type": "json_object"},
         )
-        parsed = json.loads((response.choices[0].message.content or "{}").strip())
+        content = str(response.choices[0].message.content or "").strip()
+        # 空回复必须当成失败。若让它 fall through 到 json.loads("{}")，
+        # 会返回 {has_emotion: false, memory_kind: "none"} 且 source 记为
+        # "llm"——一个看起来完全健康的「不需要记忆」，实际什么都没判。
+        if not content:
+            raise ValueError("classifier returned empty content")
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError("classifier returned no fields")
+
         memory_kind = parsed.get("memory_kind", "none")
         if memory_kind not in _VALID_MEMORY_KINDS:
             memory_kind = "none"
+
+        # 不能直接 bool()：模型把布尔写成字符串时 bool("false") 是 True。
+        has_emotion = parsed.get("has_emotion", False)
+        if not isinstance(has_emotion, bool):
+            has_emotion = str(has_emotion).strip().lower() in {"true", "yes", "1"}
+
+        try:
+            confidence = float(parsed.get("confidence", 0) or 0)
+        except (TypeError, ValueError):
+            # 分类本身是成功的，只有 confidence 脏——不能因此把整个判断丢掉。
+            confidence = 0.0
+
         return {
-            "has_emotion": bool(parsed.get("has_emotion", False)),
+            "has_emotion": has_emotion,
             "memory_kind": memory_kind,
-            "confidence": float(parsed.get("confidence", 0) or 0),
+            "confidence": confidence,
             "classification_source": "llm",
         }
-    except Exception:
+    except Exception as exc:
         # 分类失败不能让用户失去一次记忆：宁可按最宽的检索模式跑一次。
         # has_emotion 取 False——情绪分析本身也是一次 LLM 调用，分类器都连不上，
         # 它大概率也连不上，重试只是叠加延迟。
@@ -466,6 +590,11 @@ confidence：你对上述判断的把握，0 到 1。"""
             "memory_kind": "recall",
             "confidence": 0.0,
             "classification_source": "fallback",
+            # 私有键，只给 supervisor_node 记 trace 用。LangGraph 会静默丢弃
+            # 不在 MultiAgentState schema 里的键（实现阶段已验证），所以它不会
+            # 泄漏进图状态。失败原因必须带出来：降级本身只是「没判」，
+            # 知道了原因才知道该去修什么。
+            "_error": f"{type(exc).__name__}: {exc}",
         }
 ```
 
@@ -475,7 +604,34 @@ confidence：你对上述判断的把握，0 到 1。"""
 .venv/bin/pytest tests/test_agents.py -k "Supervisor" -q
 ```
 
-Expected：PASS，12 个测试（FastPath 4 + Classifier 3 + Fallback 3）全过。
+Expected：PASS，21 个测试全过。
+
+数字用 `pytest --collect-only` 按类数出来，不要靠加总——这行先前连着写错两次（一次 12，
+一次 17）。参考：FastPath 7 + Classifier 6 + Fallback 8。
+
+同时 `tests/test_memory_refactor.py::test_supervisor_skips_memory_for_chat_and_time` 会失败。
+这是**预期的**：它断言的是旧的 `delegate_to` / `intent` 契约，由 Task 3 负责重写。
+
+### Task 1 完成记录（2026-09-21）
+
+上面 Step 1 列出的测试**不是最终清单**——代码质量复审后又补了几个。最终 21 个：
+
+| 类 | 数量 | 复审后新增 |
+|---|---|---|
+| `TestSupervisorFastPath` | 7 | `test_emoji_outside_frontend_table_still_reaches_classifier`、`test_fullwidth_alphanumerics_reach_classifier`、`test_whitespace_only_message_still_skips_llm` |
+| `TestSupervisorClassifier` | 6 | `test_tool_message_is_not_user_input`、`test_supervisor_trace_carries_trace_metadata`、`test_llm_trace_records_what_was_actually_sent` |
+| `TestSupervisorFallback` | 8 | `test_empty_completion_is_a_failure_not_a_confident_no_op`、`test_garbage_confidence_does_not_discard_the_classification`、`test_string_false_has_emotion_is_not_truthy`、`test_fallback_trace_records_why_it_fell_back`、`test_error_key_is_confined_to_the_fallback_path` |
+
+复审结论：0 Critical / 0 Important。三条 Minor 已修（I4 的 trace 断言补全、降级原因进 trace、
+`_error` 键的作用域测试）。
+
+**两条留给后续的观察**（不是本次的缺陷）：
+
+1. `_recent_dialogue` 把所有非 `"ai"` 的消息都标成 `用户`。工具调用落地后，分类器提示词里
+   会出现 `用户：搜索结果：…` 这样的行。I3 的修复理由是「工具消息马上要进这个 state」，
+   同一条理由也适用于这里——归到工具调用那份 spec 里一起处理。
+2. 模型返回带 markdown 围栏的 JSON 时仍会降级（分类器没有像 `emotion_agent.py:49-53`
+   那样剥 ```）。`response_format={"type": "json_object"}` 之下基本不会发生，先记着。
 **注意**：`confidence` 不在 `MultiAgentState` schema 里，会被 LangGraph 丢弃——它只用于 `record_trace` 观测，不参与路由。这是刻意的。
 
 - [ ] **Step 5: 提交**
