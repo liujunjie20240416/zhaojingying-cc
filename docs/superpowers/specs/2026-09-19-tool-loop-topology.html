@@ -1,0 +1,349 @@
+<title>千寻工具循环拓扑</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#F4F5F7;
+    --surface:#FFFFFF;
+    --surface-sunk:#EDEFF2;
+    --ink:#14171C;
+    --muted:#5B6472;
+    --hair:#D3D8DF;
+    --line:#A8B0BC;
+    --accent:#B4520F;
+    --accent-soft:#FBEDE2;
+    --font-display:"Archivo","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+    --font-body:"IBM Plex Sans","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+    --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#0F1115;
+      --surface:#171A20;
+      --surface-sunk:#12151A;
+      --ink:#E7EAF0;
+      --muted:#98A1B0;
+      --hair:#2C323C;
+      --line:#454E5C;
+      --accent:#E8944F;
+      --accent-soft:#2A1D12;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0F1115;
+    --surface:#171A20;
+    --surface-sunk:#12151A;
+    --ink:#E7EAF0;
+    --muted:#98A1B0;
+    --hair:#2C323C;
+    --line:#454E5C;
+    --accent:#E8944F;
+    --accent-soft:#2A1D12;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:var(--ground);
+    color:var(--ink);
+    font-family:var(--font-body);
+    font-size:16px;
+    line-height:1.65;
+    padding-block:0 96px;
+    padding-inline:20px;
+  }
+  .wrap{max-width:920px;margin:0 auto}
+
+  header{padding-block:64px 40px;border-bottom:1px solid var(--hair)}
+  .eyebrow{
+    font-family:var(--font-mono);
+    font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 18px;
+  }
+  h1{
+    font-family:var(--font-display);
+    font-weight:800;font-size:clamp(34px,5.5vw,50px);line-height:1.06;
+    letter-spacing:-.02em;margin:0 0 20px;text-wrap:balance;
+  }
+  .lede{font-size:17px;color:var(--muted);max-width:64ch;margin:0}
+  .lede strong{color:var(--ink);font-weight:600}
+
+  section{padding-block:48px 0}
+  h2{
+    font-family:var(--font-display);
+    font-weight:700;font-size:13px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 24px;
+    display:flex;align-items:center;gap:14px;
+  }
+  h2::after{content:"";flex:1;height:1px;background:var(--hair)}
+  h3{font-family:var(--font-display);font-weight:700;font-size:17px;margin:0 0 8px}
+  p{margin:0 0 16px}
+  p:last-child{margin-bottom:0}
+
+  figure{margin:0}
+  .canvas{
+    background:var(--surface);border:1px solid var(--hair);border-radius:4px;
+    padding:24px 20px;overflow-x:auto;
+  }
+  svg{display:block;width:100%;min-width:720px;height:auto}
+  figcaption{
+    font-size:13.5px;color:var(--muted);margin-top:14px;
+    max-width:70ch;
+  }
+  figcaption code{font-family:var(--font-mono);font-size:12.5px;color:var(--ink)}
+
+  .legend{
+    display:flex;flex-wrap:wrap;gap:10px 28px;
+    padding:18px 20px;margin-top:16px;
+    background:var(--surface-sunk);border:1px solid var(--hair);border-radius:4px;
+    font-size:13px;color:var(--muted);
+  }
+  .legend span{display:flex;align-items:center;gap:9px}
+  .swatch{width:22px;height:2px;background:var(--line);flex:none}
+  .swatch--new{background:var(--accent)}
+  .swatch--loop{background:var(--line);background-image:linear-gradient(90deg,var(--line) 55%,transparent 55%);background-size:6px 2px}
+
+  .note{
+    border-left:2px solid var(--accent);
+    background:var(--accent-soft);
+    padding:16px 20px;border-radius:0 4px 4px 0;
+    font-size:14.5px;margin-top:20px;
+  }
+  .note p{margin:0}
+  .note p+p{margin-top:10px}
+
+  .tablewrap{overflow-x:auto;border:1px solid var(--hair);border-radius:4px;background:var(--surface)}
+  table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
+  th,td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--hair);vertical-align:top}
+  tbody tr:last-child td{border-bottom:none}
+  th{
+    font-family:var(--font-display);font-weight:700;font-size:11px;
+    letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+    background:var(--surface-sunk);white-space:nowrap;
+  }
+  td code,th code{font-family:var(--font-mono);font-size:12.5px;color:var(--ink)}
+  td.sig code{color:var(--accent);white-space:nowrap}
+
+  ul.plain{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:14px}
+  ul.plain li{display:flex;gap:14px;font-size:15px}
+  ul.plain li b{
+    font-family:var(--font-mono);font-size:12px;font-weight:600;
+    color:var(--accent);flex:none;width:20px;padding-top:3px;
+  }
+  ul.plain li span{color:var(--muted)}
+  ul.plain li span em{color:var(--ink);font-style:normal;font-weight:500}
+  ul.plain code{font-family:var(--font-mono);font-size:13px;color:var(--ink)}
+
+  .edge{stroke:var(--line);stroke-width:1.5;fill:none}
+  .edge--new{stroke:var(--accent)}
+  .edge--loop{stroke-dasharray:5 4}
+  .edge path{marker-end:url(#ah)}
+  .box rect{fill:var(--surface);stroke:var(--line);stroke-width:1.5}
+  .box--new rect{stroke:var(--accent);stroke-width:2}
+  .bar rect{fill:var(--ink)}
+  .barlabel{
+    font-family:var(--font-mono);font-size:11px;font-weight:600;
+    letter-spacing:.08em;fill:var(--ground);
+  }
+  .nodename{font-family:var(--font-mono);font-size:13.5px;font-weight:600;fill:var(--ink)}
+  .nodesub{font-family:var(--font-mono);font-size:10.5px;fill:var(--muted)}
+  .lbl{
+    font-family:var(--font-mono);font-size:10.5px;fill:var(--muted);
+    paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round;
+  }
+  .lbl--new{fill:var(--accent)}
+
+  @media (max-width:640px){
+    header{padding-block:40px 32px}
+    .canvas{padding:16px 12px}
+  }
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">千寻 DeepEcho · 设计草案</p>
+  <h1>工具循环拓扑</h1>
+  <p class="lede">在现有四个 Agent 节点之外，新增 <strong>两个 ToolNode 节点</strong>与 <strong>四条边</strong>，让 Memory Agent 与 Conversation Agent 各自获得「模型自主决定调什么工具、调几轮」的能力。图中橙色部分为本次新增，其余节点与边保持不变。</p>
+</header>
+
+<section>
+  <h2>图结构</h2>
+  <figure>
+    <div class="canvas">
+      <svg viewBox="0 0 900 640" role="img" aria-label="千寻 Agent 图结构：Supervisor 分出 emotion、memory、conversation 三条路径；memory 与 conversation 各自带一个可循环调用的 ToolNode，循环受步数上限约束。">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
+          </marker>
+        </defs>
+
+        <!-- ============ edges (drawn first, boxes sit on top) ============ -->
+        <g class="edge">
+          <path d="M500,44 V76"/>
+        </g>
+        <g class="edge">
+          <path d="M440,126 V160 H140 V200"/>
+        </g>
+        <g class="edge">
+          <path d="M500,126 V200"/>
+        </g>
+        <g class="edge">
+          <path d="M580,101 H870 V375 H540 V400"/>
+        </g>
+        <g class="edge">
+          <path d="M220,212 H420"/>
+        </g>
+        <g class="edge">
+          <path d="M420,238 H220"/>
+        </g>
+        <g class="edge">
+          <path d="M140,250 V425 H420"/>
+        </g>
+        <g class="edge edge--new">
+          <path d="M580,225 H660"/>
+        </g>
+        <g class="edge edge--new edge--loop">
+          <path d="M740,250 V300 H540 V250"/>
+        </g>
+        <g class="edge">
+          <path d="M460,250 V400"/>
+        </g>
+        <g class="edge edge--new">
+          <path d="M580,425 H660"/>
+        </g>
+        <g class="edge edge--new edge--loop">
+          <path d="M740,450 V500 H540 V450"/>
+        </g>
+        <g class="edge">
+          <path d="M460,450 V580"/>
+        </g>
+
+        <!-- ============ edge labels ============ -->
+        <g class="lbl">
+          <text x="270" y="152" text-anchor="middle">emotional</text>
+          <text x="508" y="168" text-anchor="start">recall / memory</text>
+          <text x="712" y="93" text-anchor="middle">chat / time</text>
+          <text x="320" y="212" text-anchor="middle">① recall 信号</text>
+          <text x="320" y="238" text-anchor="middle">② 强情绪词</text>
+          <text x="150" y="345" text-anchor="start">else</text>
+          <text x="472" y="332" text-anchor="start">无 tool_calls</text>
+          <text x="472" y="522" text-anchor="start">无 tool_calls</text>
+        </g>
+        <g class="lbl lbl--new">
+          <text x="620" y="215" text-anchor="middle">tool_calls</text>
+          <text x="650" y="292" text-anchor="middle">ToolMessage · 循环 ≤3 步</text>
+          <text x="620" y="415" text-anchor="middle">tool_calls</text>
+          <text x="650" y="492" text-anchor="middle">ToolMessage · 循环 ≤2 步</text>
+        </g>
+
+        <!-- ============ nodes ============ -->
+        <g class="bar">
+          <rect x="460" y="18" width="80" height="26" rx="3"/>
+        </g>
+        <text class="barlabel" x="500" y="35" text-anchor="middle">START</text>
+
+        <g class="box">
+          <rect x="420" y="76" width="160" height="50" rx="6"/>
+        </g>
+        <text class="nodename" x="500" y="106" text-anchor="middle">supervisor</text>
+
+        <g class="box">
+          <rect x="60" y="200" width="160" height="50" rx="6"/>
+        </g>
+        <text class="nodename" x="140" y="230" text-anchor="middle">emotion</text>
+
+        <g class="box">
+          <rect x="420" y="200" width="160" height="50" rx="6"/>
+        </g>
+        <text class="nodename" x="500" y="230" text-anchor="middle">memory</text>
+
+        <g class="box box--new">
+          <rect x="660" y="200" width="160" height="50" rx="6"/>
+        </g>
+        <text class="nodename" x="740" y="223" text-anchor="middle">memory_tools</text>
+        <text class="nodesub" x="740" y="239" text-anchor="middle">6 个检索工具</text>
+
+        <g class="box">
+          <rect x="420" y="400" width="160" height="50" rx="6"/>
+        </g>
+        <text class="nodename" x="500" y="430" text-anchor="middle">conversation</text>
+
+        <g class="box box--new">
+          <rect x="660" y="400" width="160" height="50" rx="6"/>
+        </g>
+        <text class="nodename" x="740" y="423" text-anchor="middle">conversation_tools</text>
+        <text class="nodesub" x="740" y="439" text-anchor="middle">3 个轻量工具</text>
+
+        <g class="bar">
+          <rect x="420" y="580" width="80" height="26" rx="3"/>
+        </g>
+        <text class="barlabel" x="460" y="597" text-anchor="middle">END</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i class="swatch"></i>既有节点与边（不变）</span>
+      <span><i class="swatch swatch--new"></i>本次新增</span>
+      <span><i class="swatch swatch--loop"></i>工具回灌边（循环）</span>
+    </div>
+    <figcaption>读取方式：<code>supervisor</code> 仍按规则把请求分到三条路径；只有跨进 <code>memory</code> 或 <code>conversation</code> 之后，控制权才交给模型——由它决定是否触发 <code>tool_calls</code>、调哪个工具、要不要再查一轮。工具结果以 <code>ToolMessage</code> 回灌，回到同一个 Agent 节点继续决策。<br><br><code>memory</code> 与 <code>emotion</code> 之间是<strong>双向</strong>的：① 由 <code>route_after_emotion</code> 走（<code>memory_done</code> 未置位且命中回忆信号），② 由 <code>route_after_memory</code> 走（<code>emotion_done</code> 未置位且命中强情绪词）。两者互斥——谁先执行谁置位自己的完成标志，后执行的一方看到标志就直接进 <code>conversation</code>，不会来回弹。</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>相对现状的改动</h2>
+  <ul class="plain">
+    <li><b>01</b><span>新增 <em>2 个 ToolNode 节点</em>与 <em>4 条边</em>（图中橙色）。原有四个节点、<code>memory_done</code> / <code>emotion_done</code> 防环不变量均不动。</span></li>
+    <li><b>02</b><span><code>route_after_memory</code> 从二选一（emotion / conversation）变成<em>三选一</em>，多出 <code>memory_tools</code> 分支；<code>conversation → END</code> 从固定边变成<em>条件边</em>，判据是 <code>tool_calls</code> 是否为空。</span></li>
+    <li><b>03</b><span>state 新增 <code>tool_steps</code> 计数（每回合重置，两个循环各自计数），步数用尽时条件边强制走出口，丢弃剩余 <code>tool_calls</code> 而不报错。</span></li>
+    <li><b>04</b><span>检索逻辑本身<em>一行不重写</em>：七个工具内部全部复用既有实现（<code>ConversationHistorySearch</code>、<code>search_semantic</code>、TimeChunk / TopicTag 查询、<code>QueryRewriter.plan</code>）。</span></li>
+  </ul>
+</section>
+
+<section>
+  <h2>工具分配</h2>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>工具</th><th>签名</th><th>挂载</th><th>内部复用</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>search_history</code></td><td class="sig"><code>(query, source?, time_hint?)</code></td><td>memory</td><td>ConversationHistorySearch（FTS5 + 向量 + 三层去重 + 来源配额）</td></tr>
+        <tr><td><code>search_memory</code></td><td class="sig"><code>(query?, subject?, category?)</code></td><td>memory</td><td>search_semantic + expand_state_trajectories</td></tr>
+        <tr><td><code>search_time</code></td><td class="sig"><code>(direction, date?)</code></td><td>memory</td><td>TimeChunk 查询（现 _search_time_chunks）</td></tr>
+        <tr><td><code>search_topics</code></td><td class="sig"><code>(topic)</code></td><td>memory</td><td>TopicTag 查询（现 _search_topic_tags）</td></tr>
+        <tr><td><code>rewrite_query</code></td><td class="sig"><code>(query)</code></td><td>memory</td><td>QueryRewriter.plan，从固定前置改为按需调用</td></tr>
+        <tr><td><code>read_around</code></td><td class="sig"><code>(message_refs, window=5)</code></td><td>memory</td><td>现有 ±5 条窗口扩展</td></tr>
+        <tr><td><code>get_time</code></td><td class="sig"><code>()</code></td><td>memory · conversation</td><td>format_current_time_context</td></tr>
+        <tr><td><code>read_around</code></td><td class="sig"><code>(message_refs, window=3)</code></td><td>conversation</td><td>展开已有证据的前后文</td></tr>
+        <tr><td><code>search_history</code></td><td class="sig"><code>(query)</code> · limit 写死 3</td><td>conversation</td><td>生成过程中的补查，避免与 memory 重复深查</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note">
+    <p><b>证据链怎么不断。</b>工具返回给模型看的是简短文本（带 <code>[msg_index]</code> 编号），同时把结构化证据写进 <code>ToolMessage.artifact</code>，由包装层收集回 state 并汇入 <code>reply_provenance</code>。模型上下文不被长 JSON 污染，<code>retrieved_raw</code> 的溯源能力保持不变。</p>
+    <p><b>给建议顺序，但不强制。</b>Memory Agent 的系统提示保留现有最佳实践（先定时间段 → 再查原文 → 不够再查话题），同时明确告诉模型可以跳过或换序。保住了现有质量下限，控制权仍然交了出去。</p>
+  </div>
+</section>
+
+<section>
+  <h2>循环安全边界</h2>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>项</th><th>策略</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>步数</td><td>memory ≤3 步、conversation ≤2 步；超限丢弃 <code>tool_calls</code> 用已有内容继续，不报错</td></tr>
+        <tr><td>单次工具超时</td><td>15s（检索全为本地 SQLite / LanceDB，正常百毫秒级；LLM rerank 内部已有降级）</td></tr>
+        <tr><td>累计预算</td><td>循环内工具累计 &gt;30s → 强制结束循环，用已有证据继续生成</td></tr>
+        <tr><td>工具异常</td><td>返回 <code>ToolMessage</code> 错误描述交给模型自行决策（重试 / 换工具 / 放弃），不抛断整图</td></tr>
+        <tr><td>全工具失败</td><td>回落到现有降级路径：有界原文投影 / 空记忆上下文继续生成</td></tr>
+        <tr><td>并发与写入</td><td>工具全部只读，不进写入链路；写入仍走原有 Reflection 与导入的事务边界</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</div>
