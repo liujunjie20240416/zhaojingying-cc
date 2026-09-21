@@ -212,7 +212,7 @@ Conversation Agent 输出 `{"bubbles": [...]}`，前端按数组逐条渲染。�
 - **失败不静默**：图执行或供应商异常通过 SSE error 事件透出到前端（“AI 回复生成失败，请重试”），不再吞掉错误；空回复或失败回复不落库，避免污染后续上下文。
 - **回复溯源**：每条回复持久化 `reply_provenance`（本轮回溯到哪些摘要、胶囊、原文证据，以及 `supervisor_decision`——两个标签的值加上判定来源 `fast_path` / `llm` / `fallback`），前端可查看，后端可审计。
 - **并发安全**：回复落库与清空历史之间用行锁 + 代际号（`online_history_generation`）保证原子性；滚动折叠按好友串行化，检查点不会并发回退。
-- **工作线程的连接自己关**：图节点跑在 LangGraph 的工作线程上，而 Django 的连接是线程局部的、只有请求线程会收到 `request_finished` 信号——`CONN_MAX_AGE=0` 那句「每个请求结束就关掉」在这条线程上是空话。Memory Agent 用 `try/finally` 自行释放连接，异常路径同样释放。
+- **数据库连接的关闭时机**：Django 把 `close_old_connections` 挂在它自己的响应对象 close 上，而本应用是 FastAPI + `django.setup()` 只用 ORM，`WSGIHandler` 只挂在 `/admin`——所以 `/api/*` 既不触发 `request_started` 也不触发 `request_finished`，`CONN_MAX_AGE=0` 那句「每个请求结束就关掉」对链路上任何线程都是空话。当前在 SQLite 下代价很低（每线程一个句柄）；真正需要处理的是跨请求复用的 anyio 工作线程（同步路由的 ORM 读、SSE 生成器的写），换到 Postgres 之前必须补上。
 - 提供聊天文本脱敏工具，可识别密码、身份证号及自定义敏感前缀，且不修改原文件。
 - 可选 LangSmith Trace 覆盖路由、检索、压缩、最终 Prompt、预处理和 Reflection。
 

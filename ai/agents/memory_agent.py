@@ -218,7 +218,8 @@ def _recent_dialogue_for_retrieval(messages: list, limit: int = 4) -> str:
 def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
     """Memory Agent — 三轮检索：时间匹配 → 混合检索 → 话题路由。
 
-    套一层 try/finally 是为了关数据库连接，见下面 _run_memory_agent 的说明。
+    套一层 try/finally 关数据库连接。这层是防御性的，不是在补一个正在漏的连接
+    ——原因写在下面 _run_memory_agent 的 docstring 里，别照着想象改。
     """
     try:
         return _run_memory_agent(state, api_key, api_base)
@@ -229,11 +230,21 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
 def _run_memory_agent(state: dict, api_key: str = "", api_base: str = "") -> dict:
     """三轮检索：时间匹配 → 混合检索 → 话题路由。
 
-    单独成函数，好让外面那层只管关连接。注意这个节点跑在 LangGraph
-    的工作线程上（emotion 并行时是另一条），而 Django 的连接是线程局部的、
-    只有请求线程会收到 request_finished 信号——所以 CONN_MAX_AGE=0 那句
-    「每个请求结束就关掉」在这条线程上是句空话。不自己关，连接就一直挂在
-    线程池的线程上。
+    单独成函数，好让外面那层只管关连接。
+
+    关于那层 finally 到底在防什么——它是**防御性**的，不是修一个正在漏的连接。
+    实测：每个请求在 api/chat.py 新起线程里 asyncio.run(...)，LangGraph 用该
+    loop 的默认 executor 派发同步节点，而 asyncio.run 退出时会 shutdown 这个
+    executor 并 join 线程。所以节点线程随请求消亡，它身上的连接本来也不会长期驻留。
+
+    真正无人关闭的是另一批线程：FastAPI/anyio 的工作线程（同步路由里的 ORM 读、
+    SSE 生成器里的写、后台 daemon 线程）。它们跨请求复用，空闲 10s 才回收。
+    根因是 Django 的 request_finished 挂在它自己的响应对象 close 上，而本应用是
+    FastAPI + django.setup() 只用 ORM，WSGIHandler 只挂在 /admin——所以 /api/*
+    既不触发 request_started 也不触发 request_finished。这句「每个请求结束就关掉」
+    对链路上**任何**线程都是空话，不只是这条。
+
+    在 SQLite 下代价很低（每线程一个句柄），换 Postgres 之前要处理那批线程。
     """
     user_msg = ""
     for msg in reversed(state.get("messages", [])):
