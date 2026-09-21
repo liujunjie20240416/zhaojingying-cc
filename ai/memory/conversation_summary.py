@@ -8,11 +8,19 @@ import logging
 import json
 import re
 import threading
+import time
 
 from django.utils.timezone import now
 from openai import OpenAI
 
-from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.config import (
+    llm_api_base,
+    llm_api_key,
+    llm_model,
+    require_llm_config,
+    sub_llm_timeout,
+    summary_timeout,
+)
 from ai.memory.context_budget import (
     RECENT_HISTORY_TOKEN_BUDGET,
     SUMMARY_TOKEN_BUDGET,
@@ -27,6 +35,10 @@ logger = logging.getLogger(__name__)
 MIN_RECENT_TURNS = 10
 MAX_SUMMARY_CHARS = 2000
 MAX_BATCH_CHARS = 8000
+# 折叠整轮的总墙钟预算。单批有 summary_timeout()，但批数不限——进图之前这段是
+# 同步阻塞的，用户已经在等了，所以它是整条路径上最大的无界项。超预算就停手、
+# 带着已经折叠好的那部分返回：检查点是每批之后落的，剩下的下一轮接着折。
+SUMMARY_FOLD_BUDGET_SECONDS = 60.0
 
 _fold_locks: dict[int, threading.Lock] = {}
 _fold_locks_guard = threading.Lock()
@@ -83,7 +95,8 @@ def _summarize_batch(
     client = OpenAI(
         api_key=api_key or llm_api_key(),
         base_url=api_base or llm_api_base(),
-        timeout=40,
+        timeout=summary_timeout(),
+        max_retries=1,
     )
     dialogue = "\n\n".join(_message_text(message) for message in messages)
     start_id, end_id = messages[0].id, messages[-1].id
@@ -240,8 +253,25 @@ def prepare_conversation_context(
         recent.reverse()
         to_compact = unsummarized[:len(unsummarized) - len(recent)]
         summary = friend.conversation_summary or ""
+        batches = _partition_batches(to_compact)
+        fold_started_at = time.monotonic()
         try:
-            for batch in _partition_batches(to_compact):
+            for index, batch in enumerate(batches):
+                if time.monotonic() - fold_started_at > SUMMARY_FOLD_BUDGET_SECONDS:
+                    # 超预算就停手，剩下的留给下一轮：检查点是每批之后落的，
+                    # 已经折过的不会重复折，没折到的下一轮接着折。
+                    #
+                    # 代价说清楚：这一轮模型看到的是「摘要（覆盖到第 k 批）」+
+                    # 「最近的原文」，中间 k+1..N 那一截这一轮是缺的。原文在库里
+                    # 没丢，下一轮补上。只有在供应商慢到离谱时才会走到这——正常
+                    # 一轮就一两批，远够用。
+                    logger.warning(
+                        "Summary fold budget exhausted for Friend %s; %d of %d batch(es) deferred to the next turn",
+                        friend.id,
+                        len(batches) - index,
+                        len(batches),
+                    )
+                    break
                 summarized = _summarize_batch(summary, batch, api_key, api_base)
                 # Keep old tests/extensions that return the pre-collapse string
                 # shape working while new providers return the structured tuple.

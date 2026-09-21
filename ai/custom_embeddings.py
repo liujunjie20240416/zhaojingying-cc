@@ -1,7 +1,7 @@
 from langchain_core.embeddings import Embeddings
 from openai import OpenAI
 
-from ai.config import dashscope_api_base, dashscope_api_key
+from ai.config import dashscope_api_base, dashscope_api_key, embedding_timeout
 from ai.tracing import record_trace
 
 
@@ -10,6 +10,10 @@ class CustomEmbeddings(Embeddings):
         self.client = OpenAI(
             api_key=dashscope_api_key(),
             base_url=dashscope_api_base(),
+            # 单轮最多被调 9 次（3 query × semantic/imported/online 三条路径），
+            # 每次新起一个 client。不设超时的话单轮光 embedding 一项就能挂 30 分钟。
+            timeout=embedding_timeout(),
+            max_retries=1,
         )
 
     def embed_documents(self, texts):

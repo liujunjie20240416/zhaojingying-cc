@@ -14,7 +14,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 logger = logging.getLogger(__name__)
 
-from ai.config import dashscope_api_key, dashscope_wss_url
+from ai.config import dashscope_api_key, dashscope_wss_url, turn_deadline
 from api.deps import get_current_user
 from api.errors import ApiError
 from api.schemas import ChatRequest
@@ -37,17 +37,29 @@ router = APIRouter()
 
 
 async def tts_sender(app, inputs, mq, ws, task_id):
-    result = await app.ainvoke(
-        inputs,
-        config={
-            "run_name": "chat_supervisor_graph",
-            "metadata": inputs.get("trace_metadata", {}),
-            "tags": ["chat", "supervisor-graph"],
-        },
-    )
+    try:
+        result = await asyncio.wait_for(
+            app.ainvoke(
+                inputs,
+                config={
+                    "run_name": "chat_supervisor_graph",
+                    "metadata": inputs.get("trace_metadata", {}),
+                    "tags": ["chat", "supervisor-graph"],
+                },
+            ),
+            timeout=turn_deadline(),
+        )
+    except asyncio.TimeoutError:
+        # deadline 只保证用户不再干等，不保证服务端停手：节点是同步函数，跑在
+        # executor 线程上，取消不了——那个线程会把已经发出去的调用跑完。
+        # 所以这里记一笔日志，因为「谁超的」只有这条线索引得到。
+        logger.error(
+            "Chat turn exceeded %.0fs deadline for friend %s",
+            turn_deadline(),
+            inputs.get("friend_id"),
+        )
+        raise
     final_message = result.get("messages", [])[-1]
-    if result.get("context_diagnostics"):
-        mq.put_nowait({"context_diagnostics": result["context_diagnostics"]})
     provenance = dict(result.get("reply_provenance", inputs.get("reply_provenance", {})))
     # supervisor_decision 是从三个 state 字段拼出来的 provenance 字段，不是 state 键。
     provenance["supervisor_decision"] = {
@@ -265,8 +277,6 @@ def event_stream(
         if msg.get("reply_provenance") is not None:
             reply_provenance = msg["reply_provenance"]
             yield f"data: {json.dumps({'reply_provenance': reply_provenance}, ensure_ascii=False)}\n\n"
-        if msg.get("context_diagnostics") is not None:
-            yield f"data: {json.dumps({'context_diagnostics': msg['context_diagnostics']}, ensure_ascii=False)}\n\n"
 
     # A failed or content-less turn must not persist an empty AI message that
     # later pollutes history and future context assembly.

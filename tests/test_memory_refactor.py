@@ -1,4 +1,5 @@
 import datetime
+import time
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -517,6 +518,67 @@ def test_conversation_context_compacts_old_turns_and_restores_latest_ten(monkeyp
 
 
 @pytest.mark.django_db
+def test_summary_fold_stops_at_budget_and_defers_the_rest(monkeypatch):
+    """折叠有总预算，烧完就停手，剩下的留给下一轮。
+
+    摘要折叠发生在**进图之前**，同步阻塞，用户已经在等了。单批有超时，但批数不限，
+    所以它是整条请求路径上最大的无界项——没有这个预算，供应商慢的时候用户能等上
+    好几分钟，而轮级 deadline 管的是图，管不到这里。
+
+    停手不是失败：检查点是每批之后落的，已经折过的不会重复折，这一轮没折到的
+    下一轮接着折。所以断言要同时钉住两件事——真的停了，以及停的位置之前的
+    进度确实落库了。
+    """
+    from django.contrib.auth.models import User
+    from ai.memory import conversation_summary as summary_module
+    from storage.models.character import Character
+    from storage.models.friend import Friend, Message
+    from storage.models.user import UserProfile
+
+    profile = UserProfile.objects.create(
+        user=User.objects.create_user(username="fold-budget")
+    )
+    character = Character.objects.create(
+        author=profile, name="女友", profile="温柔",
+        photo="character/photos/default.jpg",
+        background_image="character/background_images/default.jpg",
+    )
+    friend = Friend.objects.create(me=profile, character=character)
+    rows = [
+        Message.objects.create(
+            friend=friend,
+            user_message=f"用户{index}" + "问" * 500,
+            input="",
+            output=f"回复{index}" + "答" * 500,
+        )
+        for index in range(40)
+    ]
+    calls = []
+
+    def summarize(previous, batch, *args, **kwargs):
+        # 每一批都慢到把预算烧穿：第一批折完，第二次检查就该停手。
+        time.sleep(0.05)
+        calls.append([message.id for message in batch])
+        return "较早对话摘要。"
+
+    monkeypatch.setattr(summary_module, "_summarize_batch", summarize)
+    monkeypatch.setattr(summary_module, "SUMMARY_FOLD_BUDGET_SECONDS", 0.02)
+
+    summary, recent = summary_module.prepare_conversation_context(friend)
+    friend.refresh_from_db()
+
+    assert len(calls) == 1, (
+        f"预算耗尽后还在继续折：折了 {len(calls)} 批。"
+        "SUMMARY_FOLD_BUDGET_SECONDS 没有在批与批之间被检查。"
+    )
+    assert summary == "较早对话摘要。"
+    assert friend.summary_through_message_id == rows[len(calls[0]) - 1].id, (
+        "停手前已折完的那批必须落库——检查点没推进的话，下一轮会从同一位置重折"
+    )
+    assert recent, "无论折了几批，返回的原文投影都不能是空的"
+
+
+@pytest.mark.django_db
 def test_concurrent_fold_requester_does_not_fold_again(monkeypatch):
     """Stale checkpoint readers must not re-fold the same range.
 
@@ -756,15 +818,249 @@ def test_memory_kind_drives_retrieval_strategy(monkeypatch):
     assert searched == planned_queries, "recall 无视语义可靠性，强制翻原文"
 
 
+def _seed_stage_fixture(username: str):
+    """建一套「三轮检索都有前置条件」的最小数据。
+
+    分阶段兜底的测试必须让**两个**阶段同时有产物可出，否则「只丢这一块」证不出来
+    ——另一块本来就是空的，断言恒真。
+    """
+    from django.contrib.auth.models import User
+    from storage.models.character import Character
+    from storage.models.friend import Friend, Message
+    from storage.models.user import UserProfile
+
+    profile = UserProfile.objects.create(user=User.objects.create_user(username=username))
+    character = Character.objects.create(author=profile, name="女友", profile="温柔")
+    friend = Friend.objects.create(me=profile, character=character)
+    # 第 2 轮的前置条件 `has_online`：没有在线消息时 should_search_raw 为真也不查库。
+    Message.objects.create(friend=friend, user_message="普通在线消息", input="", output="好")
+    return character, friend
+
+
+HISTORY_TEXT = "我们上次说好一起去看海"
+
+
+def _stub_retrieval(monkeypatch, module, *, semantic=None, rerank=None):
+    """把三轮检索的外部依赖换成可控 stub；只留被测的那一个可以炸。"""
+    monkeypatch.setattr(module, "search_semantic", semantic or (lambda *a, **kw: []))
+    monkeypatch.setattr(module.Reranker, "rerank", rerank or (lambda self, q, docs, top_k: docs))
+    monkeypatch.setattr(
+        module.ConversationHistorySearch, "search",
+        lambda self, queries, **kw: [{
+            "source_type": "online_chat",
+            "content": HISTORY_TEXT,
+            "score": 0.9,
+            "message_refs": [1],
+            "timestamp": "2026-07-01",
+        }],
+    )
+    monkeypatch.setattr(
+        module.QueryRewriter, "plan",
+        lambda self, *a, **kw: {"queries": ["今天天气不错"], "temporal_anchor": "unknown"},
+    )
+
+
+def _recall_state(character, friend):
+    from langchain_core.messages import HumanMessage
+
+    return {
+        "messages": [HumanMessage(content="今天天气不错")],
+        "friend_id": friend.id,
+        "character_id": character.id,
+        "semantic_facts": [],
+        "memory_kind": "recall",
+    }
+
+
+@pytest.mark.django_db
+def test_semantic_stage_failure_keeps_history_stage(monkeypatch):
+    """语义检索炸了，原文检索的结果必须还在。
+
+    只在最外层包一个 try 的话这里会退化成「这轮没有记忆」——把整段 context 一起
+    丢掉。这条断言就是分阶段兜底存在的全部理由。
+    """
+    from ai.agents import memory_agent as module
+
+    character, friend = _seed_stage_fixture("stage-semantic")
+
+    def boom(*a, **kw):
+        raise RuntimeError("向量库挂了")
+
+    _stub_retrieval(monkeypatch, module, semantic=boom)
+    result = module.memory_agent_node(_recall_state(character, friend), api_key="t", api_base="u")
+
+    assert result["semantic_facts"] == [], "语义检索炸了，这一块就该是空的"
+    assert HISTORY_TEXT in result["memory_context"], "语义那块炸了不该把原文那块一起赔进去"
+
+
+@pytest.mark.django_db
+def test_history_stage_failure_keeps_semantic_stage(monkeypatch):
+    """原文检索炸了，语义事实必须还在，而且不能留下半截证据。
+
+    `retrieved_raw` 是从 `history_hits` 派生的。失败时只清 context 不清 hits 的话，
+    provenance 会列出一批「有证据」但从来没进过 prompt 的原文——前端证据面板会
+    指着一段没被用上的聊天说这是依据。
+    """
+    from ai.agents import memory_agent as module
+
+    character, friend = _seed_stage_fixture("stage-history")
+
+    def boom(self, query, docs, top_k):
+        raise RuntimeError("rerank 挂了")
+
+    _stub_retrieval(
+        monkeypatch, module,
+        semantic=lambda *a, **kw: [
+            {"id": 1, "fact": "用户住在杭州", "memory_state": "current", "subject": "user"},
+        ],
+        rerank=boom,
+    )
+    result = module.memory_agent_node(_recall_state(character, friend), api_key="t", api_base="u")
+
+    assert "用户住在杭州" in result["memory_context"], "原文那块炸了不该把语义事实一起赔进去"
+    assert HISTORY_TEXT not in result["memory_context"]
+    assert result["reply_provenance"]["retrieved_raw"] == [], "炸掉那一轮的证据不能留在 provenance 里"
+    assert "用户住在杭州" in [f["fact"] for f in result["reply_provenance"]["semantic_facts"]]
+
+
+@pytest.mark.django_db
+def test_client_construction_failure_only_costs_the_history_stage(monkeypatch):
+    """检索 client **构造**失败也只得丢原文那一块。
+
+    跑真实故障时发现的：`ConversationHistorySearch()` 的构造里会 new 一个
+    CustomEmbeddings，缺 DASHSCOPE_API_KEY 时构造函数直接抛 OpenAIError。原先两个
+    client 建在所有阶段守卫**之前**，于是一次 embedding 鉴权失效带走全部五个阶段
+    ——时间块、话题、关系概览都是纯 SQL，本来活得下来。外层 except 还在，所以整轮
+    没死，用户看不出问题；作废的是「一块失败只丢那一块」，而且失败现场从
+    history_search 那条 trace 挪到了外层那条，事后更难查。
+    """
+    from ai.agents import memory_agent as module
+
+    character, friend = _seed_stage_fixture("stage-ctor")
+
+    def boom(*a, **kw):
+        raise RuntimeError("Missing credentials. Please pass an `api_key`")
+
+    _stub_retrieval(
+        monkeypatch, module,
+        semantic=lambda *a, **kw: [
+            {"id": 1, "fact": "用户住在杭州", "memory_state": "current", "subject": "user"},
+        ],
+    )
+    monkeypatch.setattr(module.ConversationHistorySearch, "__init__", boom)
+    monkeypatch.setattr(module.Reranker, "__init__", boom)
+
+    result = module.memory_agent_node(_recall_state(character, friend), api_key="t", api_base="u")
+
+    assert "用户住在杭州" in result["memory_context"], "构造失败不该把语义那块一起赔进去"
+    assert HISTORY_TEXT not in result["memory_context"]
+
+
+@pytest.mark.django_db
+def test_history_stage_failure_after_rerank_clears_half_built_evidence(monkeypatch):
+    """失败点落在 rerank **之后**时，已经拿到的 hits 也要清掉。
+
+    上面那条测试证不出这一点：rerank 是这段里最靠前的可失败点，在它那里炸掉时
+    history_hits 还是初始的 []，「清空」等于没做——把 `history_hits = []` 那行删掉
+    测试照样绿。
+
+    这里让 rerank 成功、下游失败：上游给了一个 message_refs 不是可迭代对象的 hit，
+    `_select_source_diverse_hits` 里的 `tuple(hit.get("message_refs") or [])` 直接抛
+    TypeError。这是真实可能发生的上游数据形状错误，不是硬造的场景。
+    """
+    from ai.agents import memory_agent as module
+
+    character, friend = _seed_stage_fixture("stage-half-built")
+    _stub_retrieval(monkeypatch, module)
+    monkeypatch.setattr(
+        module.ConversationHistorySearch, "search",
+        lambda self, queries, **kw: [{
+            "source_type": "online_chat",
+            "content": HISTORY_TEXT,
+            "score": 0.9,
+            "message_refs": 1,  # 不是 list —— tuple(1) 会抛 TypeError
+            "timestamp": "2026-07-01",
+        }],
+    )
+    result = module.memory_agent_node(_recall_state(character, friend), api_key="t", api_base="u")
+
+    assert HISTORY_TEXT not in result["memory_context"]
+    assert result["reply_provenance"]["retrieved_raw"] == [], (
+        "rerank 已经把 hits 交出来了，但这一段整体作废——provenance 不能留着没进过 prompt 的证据"
+    )
+
+
+@pytest.mark.django_db
+def test_stage_failure_records_why_in_trace(monkeypatch):
+    """降级本身只是「没查成」，得知道原因才知道该去修什么。
+
+    原因带异常原文而不是 "semantic_search_failed" 这种原因码：超时、向量库挂了、
+    鉴权过期三种修法完全不同（同 supervisor.py 对 _error 的取舍）。
+    """
+    from ai.agents import memory_agent as module
+
+    character, friend = _seed_stage_fixture("stage-trace")
+    calls = []
+    monkeypatch.setattr(
+        module, "record_trace",
+        lambda name, inputs, outputs=None, **kw: calls.append((name, outputs)) or outputs,
+    )
+
+    def boom(*a, **kw):
+        raise RuntimeError("向量库挂了")
+
+    _stub_retrieval(monkeypatch, module, semantic=boom)
+    module.memory_agent_node(_recall_state(character, friend), api_key="t", api_base="u")
+
+    stage_spans = [outputs for name, outputs in calls if name == "memory_agent.semantic_search"]
+    assert stage_spans, "降级必须留下一个 span，否则复盘时只看到「这轮没记忆」"
+    assert "RuntimeError" in stage_spans[0]["error"]
+    assert "向量库挂了" in stage_spans[0]["error"]
+
+
+@pytest.mark.django_db
+def test_outer_fallback_does_not_return_provenance(monkeypatch):
+    """外层兜底不能返回 reply_provenance。
+
+    api/chat.py 在图跑之前就播好了 provenance 的种子（recent_online /
+    summary_through_message_id / has_working_summary）。正常路径是在 `**` 合并的
+    基础上写，兜底路径整个不返回，种子就原样留着；返回一个全新的 dict 会把种子
+    覆盖成只剩内层那几个字段。
+    """
+    from langchain_core.messages import HumanMessage
+    from ai.agents import memory_agent as module
+
+    def boom(*a, **kw):
+        raise RuntimeError("检索炸了")
+
+    monkeypatch.setattr(module, "detect_memory_intent", boom)
+    result = module.memory_agent_node(
+        {"messages": [HumanMessage(content="你好")], "semantic_facts": ["已有事实"]},
+        api_key="t",
+        api_base="u",
+    )
+
+    assert "reply_provenance" not in result, "兜底返回 provenance 会覆盖掉 api/chat.py 播的种"
+    assert set(result) == {"memory_context", "memory_sections", "semantic_facts"}
+    assert result["semantic_facts"] == ["已有事实"], "炸了也不能把上游已有的语义事实抹掉"
+
+
+@pytest.mark.django_db
 def test_memory_agent_closes_its_connection(monkeypatch):
-    """memory_agent 跑在 LangGraph 的工作线程上，要自己关连接。
+    """memory_agent 每轮都要自己关数据库连接——正常返回和降级返回都一样。
 
-    那条线程不属于任何请求，收不到 Django 的 request_finished 信号，所以
-    CONN_MAX_AGE=0 那句「每个请求结束就关掉」在它身上是句空话。
+    那层 finally 是**防御性**的：实测节点跑在 asyncio.run 的默认 executor 线程上，
+    该线程随请求一起销毁，连接本来也不会长期驻留（见 _run_memory_agent 的 docstring）。
+    真正无人关闭的是跨请求复用的 anyio 工作线程。留着它是因为它便宜，不是因为它在补
+    一个正在漏的连接。
 
-    两条断言分开测：正常返回要关，抛异常也要关。后者才是把 try/finally 和
+    两条断言分开测：正常返回要关，降级返回也要关。后者才是把 try/finally 和
     「在函数末尾补一句」区分开的那个——只留前一条的话，把 close 挪到
     `return result` 前面照样绿。
+
+    必须带 django_db：不带的话 Friend.objects 会先抛 pytest-django 的
+    RuntimeError("Database access not allowed")，boom 根本执行不到，而
+    `pytest.raises(RuntimeError)` 照样绿——这条测试曾经就是这么假绿的。
     """
     from langchain_core.messages import HumanMessage
     from ai.agents import memory_agent as module
@@ -781,11 +1077,13 @@ def test_memory_agent_closes_its_connection(monkeypatch):
         raise RuntimeError("检索炸了")
 
     monkeypatch.setattr(module, "detect_memory_intent", boom)
-    with pytest.raises(RuntimeError):
-        module.memory_agent_node(
-            {"messages": [HumanMessage(content="你好")]}, api_key="t", api_base="u"
-        )
-    assert closed == [True], "抛异常同样要关，否则连接就留在线程上了"
+    result = module.memory_agent_node(
+        {"messages": [HumanMessage(content="你好")], "semantic_facts": []},
+        api_key="t",
+        api_base="u",
+    )
+    assert result["memory_context"] == "", "检索炸了要降级成「这轮没有记忆」，不是赔掉整轮"
+    assert closed == [True], "降级返回同样要关，否则连接就留在线程上了"
 
 
 def test_tts_sender_persists_supervisor_decision():

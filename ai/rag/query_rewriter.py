@@ -1,7 +1,13 @@
 import json
 from openai import OpenAI
 
-from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.config import (
+    llm_api_base,
+    llm_api_key,
+    llm_model,
+    require_llm_config,
+    sub_llm_timeout,
+)
 from ai.tracing import record_trace
 
 
@@ -14,6 +20,12 @@ class QueryRewriter:
         self.client = OpenAI(
             api_key=api_key or llm_api_key(),
             base_url=api_base or llm_api_base(),
+            # 请求路径上的调用一律有界：SDK 默认 read=600s（还是 inter-byte，
+            # 收到任意字节就重置，连单次调用的总墙钟都不限），配默认的 2 次重试
+            # 单点最坏能到 30 分钟。max_retries=1 保留一次抖动重试，同时让
+            # 「最坏 = 2 × timeout」是个能算的账。
+            timeout=sub_llm_timeout(),
+            max_retries=1,
         )
 
     def rewrite(self, query: str) -> list[str]:

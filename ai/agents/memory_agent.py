@@ -6,6 +6,7 @@
   3. 话题路由: 用户提到话题 → 查 TopicTag → 补充相关消息
 """
 import json
+import logging
 import re
 
 from django.db import close_old_connections
@@ -23,6 +24,12 @@ from ai.tracing import record_trace
 from storage.models.chat_message import ChatMessage
 from storage.models.friend import Friend, Message
 from storage.models.import_analysis import ImportAnalysis, TimeChunk, TopicTag
+
+
+# ai/agents/ 目录里唯一的一个 logger。降级证据主要走 record_trace，但没开
+# LangSmith 的环境里 trace 是 no-op，而 memory 节点的失败模式恰好是「静默降级」
+# 而不是「没有输出」——没有日志就真的什么都看不到。
+logger = logging.getLogger(__name__)
 
 
 def _search_time_chunks(character_id: int, user_msg: str, plan: dict | None = None) -> dict | None:
@@ -218,11 +225,28 @@ def _recent_dialogue_for_retrieval(messages: list, limit: int = 4) -> str:
 def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dict:
     """Memory Agent — 三轮检索：时间匹配 → 混合检索 → 话题路由。
 
-    套一层 try/finally 关数据库连接。这层是防御性的，不是在补一个正在漏的连接
-    ——原因写在下面 _run_memory_agent 的 docstring 里，别照着想象改。
+    这层管两件收尾的事，检索本身不在这里：
+
+    1. `except`——检索失败不能让用户失去一次回复。这是 supervisor / emotion /
+       reranker / compressor 都遵守的降级契约，memory 曾经是唯一的例外。
+       `_run_memory_agent` 里已经按检索阶段做了细分兜底（一块失败只丢那一块），
+       这里兜的是没预料到的那些。
+    2. `finally: close_old_connections()`——防御性的，不是在补一个正在漏的连接。
+       原因写在下面 _run_memory_agent 的 docstring 里，别照着想象改。
     """
     try:
         return _run_memory_agent(state, api_key, api_base)
+    except Exception:
+        logger.exception("Memory agent failed for friend %s", state.get("friend_id"))
+        # 只给必需键。`memory_context` 和 `semantic_facts` 是 MultiAgentState 里
+        # 仅有的两个 required 键，缺了 LangGraph 会报错；其余下游都 null-safe。
+        # 这里**不返回** reply_provenance：api/chat.py 已经为它播过种，正常路径是
+        # 在种子上合并，这里整个不返回反而保住了种子，返回一个全新的 dict 才会覆盖掉。
+        return {
+            "memory_context": "",
+            "memory_sections": [],
+            "semantic_facts": state.get("semantic_facts", []),
+        }
     finally:
         close_old_connections()
 
@@ -255,8 +279,11 @@ def _run_memory_agent(state: dict, api_key: str = "", api_base: str = "") -> dic
     if not user_msg:
         return {"memory_context": "", "semantic_facts": state.get("semantic_facts", [])}
 
-    history_search = ConversationHistorySearch(api_key, api_base)
-    reranker = Reranker(api_key, api_base)
+    # 这两个 client 的构造**必须留在线程 2 的 try 里**（原来放在这里，早于所有阶段
+    # 守卫）。构造是会抛的：CustomEmbeddings 在缺 DASHSCOPE_API_KEY 时直接
+    # OpenAIError，而「embedding key 失效」恰恰是这个节点最可能的真实故障。
+    # 放在这里等于让它一次性带走全部五个阶段——时间块、话题、关系概览都是纯 SQL，
+    # 本来活得下来。外层 except 还能保住整轮，但「一块失败只丢那一块」就作废了。
     character_id = state.get("character_id")
     friend_id = state.get("friend_id", 0)
     # 缺字段一律当 "none"：supervisor_graph 的路由函数也是这个默认值，
@@ -294,24 +321,39 @@ def _run_memory_agent(state: dict, api_key: str = "", api_base: str = "") -> dic
         memory_intent["time_mode"] = retrieval_plan["temporal_anchor"]
 
     # 1. Search Semantic Memory
-    semantic_candidates: dict[int, dict] = {}
-    for query in queries:
-        for item in search_semantic(
-            friend_id,
-            query,
-            top_k=12,
-            include_imported=imported_context_allowed,
-        ):
-            semantic_candidates.setdefault(item["id"], item)
-    ranked_semantic_results = _rank_semantic_results(
-        list(semantic_candidates.values()),
-        memory_intent,
-    )
-    if memory_intent.get("needs_state_trajectory"):
-        ranked_semantic_results = expand_state_trajectories(
-            friend_id, ranked_semantic_results, limit=12
+    #    失败只丢这一块：semantic_results 留空 → 下面 semantic_reliable 自动变
+    #    False → memory_kind == "fact" 时会放宽去翻原文。这条链是现成的，不需要
+    #    在 except 里补任何东西。
+    semantic_results: list[dict] = []
+    try:
+        semantic_candidates: dict[int, dict] = {}
+        for query in queries:
+            for item in search_semantic(
+                friend_id,
+                query,
+                top_k=12,
+                include_imported=imported_context_allowed,
+            ):
+                semantic_candidates.setdefault(item["id"], item)
+        ranked_semantic_results = _rank_semantic_results(
+            list(semantic_candidates.values()),
+            memory_intent,
         )
-    semantic_results = ranked_semantic_results[:12 if memory_intent.get("needs_state_trajectory") else 8]
+        if memory_intent.get("needs_state_trajectory"):
+            ranked_semantic_results = expand_state_trajectories(
+                friend_id, ranked_semantic_results, limit=12
+            )
+        semantic_results = ranked_semantic_results[:12 if memory_intent.get("needs_state_trajectory") else 8]
+    except Exception as exc:
+        # 原因带异常原文而不是原因码：降级率涨了是唯一会自己冒出来的信号，
+        # 但超时、向量库挂了、鉴权过期三种修法完全不同（同 supervisor.py 的取舍）。
+        record_trace(
+            "memory_agent.semantic_search",
+            {"friend_id": friend_id, "query_count": len(queries)},
+            {"semantic_results": [], "error": f"{type(exc).__name__}: {exc}"},
+            run_type="llm",
+            metadata=state.get("trace_metadata", {}),
+        )
     # 读取端加固：只含相对时间（"本周/当天"）的旧事实没有绝对日期锚点，
     # 直接注入会被当成当前事实。统一追加"可能已过期"注释，让模型知道该
     # 事实的时间信息不可靠，而不是断言"就这周嘛"。
@@ -342,30 +384,53 @@ def _run_memory_agent(state: dict, api_key: str = "", api_base: str = "") -> dic
     trajectory_context = _format_state_trajectories(semantic_results)
 
     collapse_context = ""
-    if friend_id and memory_intent.get("time_mode") in {
-        "historical", "early", "recent", "specific_time",
-    }:
-        collapses = search_conversation_collapses(
-            friend_id,
-            user_msg,
-            time_mode=memory_intent.get("time_mode", "any"),
-            limit=3,
-        )
+    try:
+        if friend_id and memory_intent.get("time_mode") in {
+            "historical", "early", "recent", "specific_time",
+        }:
+            collapses = search_conversation_collapses(
+                friend_id,
+                user_msg,
+                time_mode=memory_intent.get("time_mode", "any"),
+                limit=3,
+            )
+        else:
+            collapses = []
         if collapses:
             lines = [
                 f"- 在线对话 message_id {collapse.start_message_id}-{collapse.end_message_id}: {collapse.summary}"
                 for collapse in collapses
             ]
             collapse_context = "【相关历史阶段胶囊】\n" + "\n".join(lines)
+    except Exception as exc:
+        record_trace(
+            "memory_agent.collapse_search",
+            {"friend_id": friend_id, "time_mode": memory_intent.get("time_mode", "any")},
+            {"collapse_context": "", "error": f"{type(exc).__name__}: {exc}"},
+            run_type="chain",
+            metadata=state.get("trace_metadata", {}),
+        )
 
     # ── 第 1 轮：时间匹配 ──
-    time_chunk = (
-        _search_time_chunks(character_id, user_msg, retrieval_plan)
-        if character_id and should_search_raw and imported_context_allowed
-        else None
-    )
+    #    time_scope 是第 2 轮的输入，失败时留 None 就是「不缩范围、全量搜」——
+    #    比丢一次回复好。
+    time_chunk = None
     time_scope = None
     time_context = ""
+    try:
+        time_chunk = (
+            _search_time_chunks(character_id, user_msg, retrieval_plan)
+            if character_id and should_search_raw and imported_context_allowed
+            else None
+        )
+    except Exception as exc:
+        record_trace(
+            "memory_agent.time_chunk_search",
+            {"character_id": character_id, "user_msg": user_msg},
+            {"time_chunk": None, "error": f"{type(exc).__name__}: {exc}"},
+            run_type="chain",
+            metadata=state.get("trace_metadata", {}),
+        )
     if time_chunk:
         time_scope = (time_chunk["start_msg_index"], time_chunk["end_msg_index"])
         time_context = f"【时间段】{time_chunk['label']}: {time_chunk['summary']}\n"
@@ -374,62 +439,98 @@ def _run_memory_agent(state: dict, api_key: str = "", api_base: str = "") -> dic
     history_context = ""
     history_hits: list[dict] = []
     history_evidence_refs: list[dict] = []
-    has_imported = bool(
-        imported_context_allowed
-        and character_id
-        and ChatMessage.objects.filter(character_id=character_id).exists()
-    )
-    has_online = bool(friend_id and Message.objects.filter(friend_id=friend_id).exists())
-    if should_search_raw and (has_imported or has_online):
-        candidates = history_search.search(
-            queries,
-            friend_id=friend_id,
-            character_id=character_id if imported_context_allowed else None,
-            imported_time_scope=time_scope,
-            top_k=30,
+    try:
+        has_imported = bool(
+            imported_context_allowed
+            and character_id
+            and ChatMessage.objects.filter(character_id=character_id).exists()
         )
-        anchor_evidence = (
-            _imported_anchor_evidence(character_id, time_scope, retrieval_plan)
-            if imported_context_allowed
-            and retrieval_plan.get("source_policy") in {"import_preferred", "balanced"}
-            else None
+        has_online = bool(friend_id and Message.objects.filter(friend_id=friend_id).exists())
+        if should_search_raw and (has_imported or has_online):
+            # 惰性构造：没活干的时候连 client 都不建，省掉一次可能抛异常的现场。
+            history_search = ConversationHistorySearch(api_key, api_base)
+            candidates = history_search.search(
+                queries,
+                friend_id=friend_id,
+                character_id=character_id if imported_context_allowed else None,
+                imported_time_scope=time_scope,
+                top_k=30,
+            )
+            anchor_evidence = (
+                _imported_anchor_evidence(character_id, time_scope, retrieval_plan)
+                if imported_context_allowed
+                and retrieval_plan.get("source_policy") in {"import_preferred", "balanced"}
+                else None
+            )
+            history_hits = Reranker(api_key, api_base).rerank(user_msg, candidates, top_k=8)
+            history_hits = _select_source_diverse_hits(
+                history_hits, retrieval_plan, anchor_evidence, limit=8
+            )
+            history_evidence_refs = [
+                {
+                    "source_type": hit.get("source_type"),
+                    "message_refs": hit.get("message_refs", []),
+                    "timestamp": hit.get("timestamp", ""),
+                }
+                for hit in history_hits[:5]
+            ]
+            history_parts = []
+            for hit in history_hits[:5]:
+                label = "导入聊天" if hit.get("source_type") == "import_chat" else "后续AI聊天"
+                history_parts.append(f"【{label}】\n{hit.get('content', '')[:1200]}")
+            history_context = "\n---\n".join(history_parts)
+            if len(history_context) > 3000 and not any(
+                signal in user_msg for signal in ("原话", "怎么说", "说了什么", "逐字")
+            ):
+                try:
+                    history_context = ContextCompressor(api_key, api_base).compress(
+                        history_context, max_length=1000
+                    )
+                except Exception:
+                    history_context = history_context[:3000]
+    except Exception as exc:
+        # 整段作废而不是保留半截：rerank 出了结果但没进 context 的话，
+        # reply_provenance.retrieved_raw 会列出永远没被用上的证据。
+        history_context = ""
+        history_hits = []
+        history_evidence_refs = []
+        record_trace(
+            "memory_agent.history_search",
+            {"friend_id": friend_id, "queries": queries, "time_scope": time_scope},
+            {"history_hits": [], "error": f"{type(exc).__name__}: {exc}"},
+            run_type="llm",
+            metadata=state.get("trace_metadata", {}),
         )
-        history_hits = reranker.rerank(user_msg, candidates, top_k=8)
-        history_hits = _select_source_diverse_hits(
-            history_hits, retrieval_plan, anchor_evidence, limit=8
-        )
-        history_evidence_refs = [
-            {
-                "source_type": hit.get("source_type"),
-                "message_refs": hit.get("message_refs", []),
-                "timestamp": hit.get("timestamp", ""),
-            }
-            for hit in history_hits[:5]
-        ]
-        history_parts = []
-        for hit in history_hits[:5]:
-            label = "导入聊天" if hit.get("source_type") == "import_chat" else "后续AI聊天"
-            history_parts.append(f"【{label}】\n{hit.get('content', '')[:1200]}")
-        history_context = "\n---\n".join(history_parts)
-        if len(history_context) > 3000 and not any(
-            signal in user_msg for signal in ("原话", "怎么说", "说了什么", "逐字")
-        ):
-            try:
-                history_context = ContextCompressor(api_key, api_base).compress(
-                    history_context, max_length=1000
-                )
-            except Exception:
-                history_context = history_context[:3000]
 
     # ── 第 3 轮：话题路由 ──
-    topic_indices = (
-        _search_topic_tags(character_id, user_msg)
-        if character_id and should_search_raw and imported_context_allowed
-        else []
-    )
+    topic_indices = []
     topic_messages = ""
+    try:
+        topic_indices = (
+            _search_topic_tags(character_id, user_msg)
+            if character_id and should_search_raw and imported_context_allowed
+            else []
+        )
+    except Exception as exc:
+        record_trace(
+            "memory_agent.topic_search",
+            {"character_id": character_id, "user_msg": user_msg},
+            {"topic_indices": [], "error": f"{type(exc).__name__}: {exc}"},
+            run_type="chain",
+            metadata=state.get("trace_metadata", {}),
+        )
     if topic_indices:
-        topic_msgs = _load_chat_messages_by_indices(character_id, topic_indices, limit=20)
+        try:
+            topic_msgs = _load_chat_messages_by_indices(character_id, topic_indices, limit=20)
+        except Exception as exc:
+            topic_msgs = []
+            record_trace(
+                "memory_agent.topic_load",
+                {"character_id": character_id, "topic_indices": topic_indices},
+                {"topic_messages": "", "error": f"{type(exc).__name__}: {exc}"},
+                run_type="chain",
+                metadata=state.get("trace_metadata", {}),
+            )
         if topic_msgs:
             char_name = state.get("character_name", "")
             chat_sender_name = state.get("chat_sender_name", "")
@@ -470,15 +571,24 @@ def _run_memory_agent(state: dict, api_key: str = "", api_base: str = "") -> dic
         or memory_intent.get("category_hint") == "relationship"
     )
     relationship_overview_context = ""
-    if character_id and needs_relationship_overview and imported_context_allowed:
-        analysis = ImportAnalysis.objects.filter(character_id=character_id, status="done").first()
-        if analysis and analysis.relationship_overview:
-            overview_parts = [analysis.relationship_overview]
-            timeline_context = _timeline_context_for_intent(analysis, memory_intent)
-            if timeline_context:
-                overview_parts.append(timeline_context)
-            relationship_overview_context = f"【关系演变概览】\n{chr(10).join(overview_parts)}"
-            sections.append({"kind": "relationship_overview", "text": relationship_overview_context})
+    try:
+        if character_id and needs_relationship_overview and imported_context_allowed:
+            analysis = ImportAnalysis.objects.filter(character_id=character_id, status="done").first()
+            if analysis and analysis.relationship_overview:
+                overview_parts = [analysis.relationship_overview]
+                timeline_context = _timeline_context_for_intent(analysis, memory_intent)
+                if timeline_context:
+                    overview_parts.append(timeline_context)
+                relationship_overview_context = f"【关系演变概览】\n{chr(10).join(overview_parts)}"
+                sections.append({"kind": "relationship_overview", "text": relationship_overview_context})
+    except Exception as exc:
+        record_trace(
+            "memory_agent.relationship_overview",
+            {"character_id": character_id},
+            {"relationship_overview_context": "", "error": f"{type(exc).__name__}: {exc}"},
+            run_type="chain",
+            metadata=state.get("trace_metadata", {}),
+        )
 
     # Fallback for callers that do not yet understand memory_sections.
     context = "\n\n".join(section["text"] for section in sections)

@@ -2,7 +2,13 @@
 import json
 from openai import OpenAI
 
-from ai.config import llm_api_base, llm_api_key, llm_model, require_llm_config
+from ai.config import (
+    llm_api_base,
+    llm_api_key,
+    llm_model,
+    require_llm_config,
+    sub_llm_timeout,
+)
 from ai.tracing import record_trace
 
 
@@ -12,7 +18,14 @@ def emotion_agent_node(state: dict, api_key: str = "", api_base: str = "") -> di
     """
     if not api_key and not api_base:
         require_llm_config()
-    client = OpenAI(api_key=api_key or llm_api_key(), base_url=api_base or llm_api_base())
+    client = OpenAI(
+        api_key=api_key or llm_api_key(),
+        base_url=api_base or llm_api_base(),
+        # 情绪分析炸了本来就只降级成 neutral（见下面的 except），没有理由让它
+        # 用 SDK 默认的 600s read 超时把整轮拖住。
+        timeout=sub_llm_timeout(),
+        max_retries=1,
+    )
 
     messages = state.get("messages", [])
     recent = []

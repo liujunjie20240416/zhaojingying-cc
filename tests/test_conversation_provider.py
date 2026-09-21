@@ -28,6 +28,10 @@ def test_text_conversation_uses_deepseek_configuration(monkeypatch):
     assert captured["model"] == "deepseek-v4-pro"
     assert captured["openai_api_key"] == "deepseek-key"
     assert captured["openai_api_base"] == "https://deepseek.example/v1"
+    from ai.config import reply_timeout
+
+    assert captured["timeout"] == reply_timeout(), "最终回复必须用最宽的那一档，但仍须有界"
+    assert captured["max_retries"] == 1, "SDK 默认是 2，单点最坏就变成 3× 而不是 2×"
 
 
 def test_image_conversation_keeps_glm_vision_configuration(monkeypatch):
@@ -58,6 +62,11 @@ def test_image_conversation_keeps_glm_vision_configuration(monkeypatch):
     assert captured["model"] == "glm-5v-turbo"
     assert captured["openai_api_key"] == "glm-key"
     assert captured["openai_api_base"] == "https://glm.example/v4"
+    from ai.config import reply_timeout
+
+    assert captured["timeout"] == reply_timeout(), (
+        "视觉路线和文本路线共用同一条构造语句，加超时时别只加在一边"
+    )
 
 
 def test_fixed_rules_precede_dynamic_context_for_prompt_cache(monkeypatch):

@@ -6,8 +6,8 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
 
 from ai.config import (
-    chat_api_base, chat_api_key, chat_model, require_chat_config, require_llm_config,
-    vision_llm_api_base, vision_llm_api_key, vision_llm_model,
+    chat_api_base, chat_api_key, chat_model, reply_timeout, require_chat_config,
+    require_llm_config, vision_llm_api_base, vision_llm_api_key, vision_llm_model,
 )
 from ai.agents.bubbles import parse_bubble_response
 from ai.memory.context_budget import (
@@ -60,6 +60,12 @@ def conversation_agent_node(state: dict, api_key: str = "", api_base: str = "") 
         model=vision_llm_model() if vision_attachments else chat_model(),
         openai_api_key=(vision_llm_api_key() if vision_attachments else (api_key or chat_api_key())),
         openai_api_base=(vision_llm_api_base() if vision_attachments else (api_base or chat_api_base())),
+        # timeout 是 request_timeout 的 pydantic 别名，两者等价；用 timeout 是为了
+        # 和项目里其它 openai.OpenAI(timeout=...) 的写法字面统一。
+        # 这里给的是全链路最宽的一档：输出最长。视觉路线共用这一条语句（走 GLM），
+        # 所以两条路线目前同值——真要分开调的话得分叉构造。
+        timeout=reply_timeout(),
+        max_retries=1,
     )
 
     character_profile = state.get("character_profile", "你是一个AI助手。")
@@ -228,7 +234,11 @@ def conversation_agent_node(state: dict, api_key: str = "", api_base: str = "") 
         run_type="llm",
         metadata=state.get("trace_metadata", {}),
     )
-    return {"messages": [normalized_resp], "context_diagnostics": diagnostics}
+    # diagnostics 只进上面那行 record_trace，不进返回值：它曾经被当作 SSE 事件
+    # 推给前端，但 MultiAgentState 里没有这个键，LangGraph 静默丢弃，api/chat.py
+    # 那半条分支从来没触发过；前端也没监听它。面板走的是 api/friend.py 的
+    # /context-diagnostics/ 端点，那条重算一遍各区块——是近似值，但是活的。
+    return {"messages": [normalized_resp]}
 
 
 def create_conversation_agent(api_key: str = "", api_base: str = ""):
