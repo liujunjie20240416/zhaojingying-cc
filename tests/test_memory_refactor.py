@@ -359,13 +359,23 @@ def test_failed_semantic_rebuild_keeps_previous_table(monkeypatch):
     assert fake_db.renamed == []
 
 
-def test_supervisor_skips_memory_for_chat_and_time():
+def test_supervisor_labels_independent_of_keywords(monkeypatch):
+    """分类结果来自 LLM，不再由关键词表决定。"""
     from langchain_core.messages import HumanMessage
-    from ai.agents.supervisor import supervisor_node
+    from ai.agents import supervisor as module
 
-    assert supervisor_node({"messages": [HumanMessage(content="你好呀")]})["delegate_to"] == "conversation"
-    assert supervisor_node({"messages": [HumanMessage(content="现在几点了")]})["intent"] == "time"
-    assert supervisor_node({"messages": [HumanMessage(content="还记得第一次见面吗")]})["delegate_to"] == "memory"
+    monkeypatch.setattr(module, "_classify_with_llm", lambda *a, **kw: {
+        "has_emotion": False, "memory_kind": "none", "classification_source": "llm",
+    })
+    plain = module.supervisor_node({"messages": [HumanMessage(content="你好呀")]})
+    assert plain["has_emotion"] is False
+    assert plain["memory_kind"] == "none"
+
+    monkeypatch.setattr(module, "_classify_with_llm", lambda *a, **kw: {
+        "has_emotion": False, "memory_kind": "recall", "classification_source": "llm",
+    })
+    recall = module.supervisor_node({"messages": [HumanMessage(content="还记得第一次见面吗")]})
+    assert recall["memory_kind"] == "recall"
 
 
 def test_conversation_builds_one_system_message(monkeypatch):
@@ -638,63 +648,6 @@ def test_emoji_meaning_does_not_modify_user_message():
 
     assert messages[-1].content == "你还记得那次吗🙂‍↕️"
     assert "用户表情含义" not in messages[-1].content
-
-
-def test_emotion_and_memory_each_run_at_most_once():
-    from langchain_core.messages import HumanMessage
-    from ai.agents.supervisor_graph import route_after_emotion, route_after_memory
-
-    state = {
-        "messages": [HumanMessage(content="你记得上次我很难过吗")],
-        "intent": "emotional",
-        "memory_done": False,
-        "emotion_done": True,
-    }
-    assert route_after_emotion(state) == "memory"
-
-    state["memory_done"] = True
-    assert route_after_memory(state) == "conversation"
-    assert route_after_emotion(state) == "conversation"
-
-
-def test_supervisor_graph_does_not_loop_for_emotional_recall(monkeypatch):
-    from langchain_core.messages import AIMessage, HumanMessage
-    from ai.agents import supervisor_graph as module
-
-    calls = []
-    monkeypatch.setattr(module, "supervisor_node", lambda state: {
-        "intent": "emotional", "delegate_to": "emotion",
-    })
-    monkeypatch.setattr(module, "emotion_agent_node", lambda state: (
-        calls.append("emotion") or {"emotion_analysis": {"intensity": 8}}
-    ))
-    monkeypatch.setattr(module, "memory_agent_node", lambda state: (
-        calls.append("memory") or {"memory_context": "上次很难过", "semantic_facts": []}
-    ))
-    monkeypatch.setattr(module, "conversation_agent_node", lambda state: (
-        calls.append("conversation") or {"messages": [AIMessage(content="我记得")]}
-    ))
-    app = module.create_supervisor_app()
-
-    result = app.invoke({
-        "messages": [HumanMessage(content="你记得上次我很难过吗")],
-        "intent": "",
-        "delegate_to": "",
-        "memory_context": "",
-        "emotion_analysis": None,
-        "character_profile": "温柔",
-        "style_profile": "",
-        "base_system_prompt": "",
-        "time_context": "",
-        "character_name": "女友",
-        "chat_sender_name": "女友",
-        "semantic_facts": [],
-        "friend_id": 0,
-        "character_id": None,
-    })
-
-    assert calls == ["emotion", "memory", "conversation"]
-    assert result["messages"][-1].content == "我记得"
 
 
 @pytest.mark.django_db

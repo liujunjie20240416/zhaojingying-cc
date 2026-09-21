@@ -356,12 +356,7 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
         })
 
     # Use new Supervisor Graph
-    app = create_supervisor_app(
-        friend_id=friend.id,
-        character_id=friend.character.id,
-        character_name=friend.character.name,
-        character_profile=friend.character.profile,
-    )
+    app = create_supervisor_app()
 
     # Conversation Agent will build exactly one final SystemMessage.
     system_prompts = SystemPrompt.objects.filter(title="回复").order_by("order_number")

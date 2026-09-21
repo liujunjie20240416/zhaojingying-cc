@@ -244,11 +244,9 @@ _original_create_app = ChatGraph.create_app
 
 @staticmethod
 def _compat_create_app(character_id=None, character_name="", chat_sender_name=""):
-    return create_supervisor_app(
-        character_id=character_id,
-        character_name=character_name,
-        character_profile="",
-    )
+    # SupervisorGraph 不接受参数：节点从 state 读值（见 supervisor_graph.py）。
+    # 这个 shim 的参数只为兼容旧签名而保留。
+    return create_supervisor_app()
 
 
 ChatGraph.create_app = _compat_create_app

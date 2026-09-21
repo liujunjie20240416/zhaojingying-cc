@@ -165,7 +165,7 @@ START → supervisor
 - `previous_intent`（意图继承机制整套移除）
 - `memory_done`、`emotion_done`（图无环，防环标志失效）
 
-**`reply_provenance` 变化**：`supervisor_intent` 字段改为 `supervisor_decision`，内容为 `{has_emotion, memory_kind, classification_source}`。该字段目前只有 `api/chat.py` 内部读写，前端不使用（已确认 `frontend/src` 无引用）。
+**`reply_provenance` 变化**：`supervisor_intent` 字段改为 `supervisor_decision`，内容为 `{has_emotion, memory_kind, classification_source}`——由 `api/chat.py` 从图结果中**拼装**，不是从 state 里读一个同名的键（该键不存在，详见 §4 的 L54 条）。该字段目前只有 `api/chat.py` 内部读写，前端不使用（已确认 `frontend/src` 无引用）。
 
 **`confidence` 不进状态**：实现阶段验证发现 LangGraph 会**静默丢弃**节点返回中不在状态 schema 里的键。`confidence` 不参与路由也不进 provenance，只通过 `record_trace("supervisor.route", …)` 落进 trace，不从图结果里读。
 
@@ -203,7 +203,19 @@ START → supervisor
 
 ### `api/chat.py`
 
-- **L54**：`provenance["supervisor_intent"] = result.get("intent", "chat")` → `provenance["supervisor_decision"] = result.get("supervisor_decision", {})`
+- **L54**：`provenance["supervisor_intent"] = result.get("intent", "chat")` 改为**从图结果里拼装** `supervisor_decision`：
+
+  ```python
+  provenance["supervisor_decision"] = {
+      "has_emotion": result.get("has_emotion", False),
+      "memory_kind": result.get("memory_kind", "none"),
+      "classification_source": result.get("classification_source", ""),
+  }
+  ```
+
+  **不能写成 `result.get("supervisor_decision", {})`**——那是在读一个从不存在的键，永远是 `{}`。
+  `supervisor_decision` 是 provenance 里的一个**字段名**，不是 state 里的键；它的三个内容来自
+  §3.5 新增的三个 state 字段。初版 spec 在这里写错了，实现阶段才发现。
 - **L396-406**：删除 `previous_intent` 的读取与注入
 - **初始 state（L403-406 附近）**：`"intent": ""` / `"delegate_to": ""` → `"has_emotion": False` / `"memory_kind": "none"`
 

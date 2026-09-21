@@ -980,6 +980,46 @@ EOF
 )"
 ```
 
+### Task 2 完成记录（2026-09-21）
+
+复审：spec 合规 ✅；代码质量 **approve**（0 Critical / 0 Important，三条 Minor）。
+
+最终状态：`pytest tests/ -q` → **全绿**（0 failed）。`TestSupervisorGraph` 从 1 个
+`llm_integration` 慢测试（且断言本身是空的）换成 8 个真测试。
+
+复审后落地的四处改动：
+
+1. **并行 DB 测试的断言换成了 `search_semantic(include_imported=True)`。** 原先断言
+   `retrieval_plan["queries"]` 只能证明查询**没抛异常**，不能证明**读到了**——
+   `Friend.objects...first()` 查不到时返回 `None` 而非抛错，`plan()` 照跑。
+   复审用 `friend_id=999999` 复现了「旧断言绿、新断言红」。顺带解掉了一个耦合：
+   原先 `plan()` 之所以被调用，靠的是 `detect_memory_intent` 的关键词兜底，
+   而那正是 Task 3 要改掉的东西。
+2. **删掉 `create_supervisor_app` 的六个参数。** 它们在改动前就是死的（`git show HEAD` 确认），
+   签名承诺了一份不生效的配置——正是这次改造要消灭的那类问题，不该留在改造内部。
+3. `test_supervisor_skips_memory_for_chat_and_time` 提前重写（见上）。
+4. `test_graph_has_no_cycles` 拆成两个：`test_graph_topology_is_frozen`（精确边集，
+   spec §3.3 要求 7 条）和 `test_graph_has_no_cycles`（可达性）。**不能合并**——
+   一个经由**新节点**的环（未来的 `tools`：`supervisor → tools → supervisor`）
+   两个端点都在四个节点名之外，按名字过滤的边集看不见它。
+
+  这条值得记一笔：**实现者第一版的环检测测试自己就是「不可能失败的守卫」**——
+  它从过滤到四个节点的边集建邻接表，于是塞进去一个 `tools` 环它照样绿。
+  改成从**未过滤**的边集建邻接表、断言「从 START 可达的节点里没有能回到自己的」才咬得住。
+  这个毛病在这次改造里出现第三次了（I3 的测试、并行 DB 测试、这个）。
+
+**留给后续的两条**（都不是本次的缺陷）：
+
+1. **`memory_agent_node` 缺 `finally: close_old_connections()`。** 生产路径
+   （`api/chat.py:40` 的 `await app.ainvoke`）下 memory 节点每轮都跑在线程池线程上，
+   两个标签同时命中时 emotion 还会并发开第二个线程。那些线程上的 Django 连接从不关闭。
+   且「两个并发分支安全」目前**仅仅因为 emotion 不碰数据库**——这个前提没有任何东西守着。
+   属于改动行为，单开一次。
+2. **`ChatGraph` 兼容层全仓零调用**（`ai/chat_graph.py:239-254`）。本次只让 shim 跟上新签名，
+   没有删。`context_diagnostics` 的 SSE 通道同样两头都断（`conversation_agent.py:231`
+   返回值不在 schema 里被丢弃，`api/chat.py:49-50` 永远拿不到；前端零引用；
+   诊断功能实际走 `api/friend.py:18` 的独立端点）。
+
 ---
 
 ## Task 3: 同步 `memory_agent.py` 与 `api/chat.py`
@@ -1029,7 +1069,8 @@ def test_emoji_context_uses_llm_supervisor(monkeypatch):
     assert result["classification_source"] == "llm"
 ```
 
-删除 `test_emotion_and_memory_each_run_at_most_once`（第 643–657 行）——它断言的两个标志已经不存在了。用下面这个替代：
+`test_emotion_and_memory_each_run_at_most_once` **已在 Task 2 删除**（它引用的 `route_after_emotion` /
+`route_after_memory` 是 Task 2 删掉的符号，留着就是 ImportError）。这里只需**新增**下面这个测试：
 
 ```python
 @pytest.mark.django_db
@@ -1075,48 +1116,15 @@ def test_memory_kind_drives_retrieval_strategy(monkeypatch):
     assert len(searched) == 1, "recall 必须翻原文"
 ```
 
-把 `test_supervisor_graph_does_not_loop_for_emotional_recall`（第 660 行起）替换为：
+`test_supervisor_graph_does_not_loop_for_emotional_recall` **已在 Task 2 删除**，它的活覆盖
+（两个节点都执行、回合正常收尾）由 Task 2 新增的
+`TestSupervisorGraph::test_both_labels_run_emotion_and_memory_then_conversation` 承担，
+且那条还多断言了 `calls[-1] == "conversation"`。这里不需要再写一遍。
 
-```python
-def test_supervisor_graph_runs_emotion_and_memory_in_parallel(monkeypatch):
-    from langchain_core.messages import AIMessage, HumanMessage
-    from ai.agents import supervisor_graph as module
-
-    calls = []
-    monkeypatch.setattr(module, "supervisor_node", lambda state: {
-        "has_emotion": True, "memory_kind": "recall", "classification_source": "llm",
-    })
-    monkeypatch.setattr(module, "emotion_agent_node", lambda state: (
-        calls.append("emotion") or {"emotion_analysis": {"intensity": 8}}
-    ))
-    monkeypatch.setattr(module, "memory_agent_node", lambda state: (
-        calls.append("memory") or {"memory_context": "上次很难过", "semantic_facts": []}
-    ))
-    monkeypatch.setattr(module, "conversation_agent_node", lambda state: (
-        calls.append("conversation") or {"messages": [AIMessage(content="我记得")]}
-    ))
-    app = module.create_supervisor_app()
-
-    result = app.invoke({
-        "messages": [HumanMessage(content="你记得上次我很难过吗")],
-        "has_emotion": False,
-        "memory_kind": "none",
-        "memory_context": "",
-        "emotion_analysis": None,
-        "character_profile": "温柔",
-        "style_profile": "",
-        "base_system_prompt": "",
-        "time_context": "",
-        "character_name": "女友",
-        "chat_sender_name": "女友",
-        "semantic_facts": [],
-        "friend_id": 0,
-        "character_id": None,
-    })
-
-    assert sorted(calls) == ["conversation", "emotion", "memory"]
-    assert result["messages"][-1].content == "我记得"
-```
+**注意**：`test_supervisor_skips_memory_for_chat_and_time` **已在 Task 2 提前重写**为
+`test_supervisor_labels_independent_of_keywords`（理由同上：Task 2 本来就在编辑这个文件，
+留一个红测试在那里没有意义）。所以 Task 3 开始时 `tests/test_memory_refactor.py` 应该是**全绿**的。
+如果你看到红的，先查清楚再动手——不要以为「那是在预期内的」。
 
 最后把第 776 行的 `"intent": "recall"` 改成 `"memory_kind": "recall"`。
 

@@ -471,21 +471,216 @@ class TestConversationAgent:
         assert len(result["messages"]) > 0
 
 
+class TestSupervisorGraphRouting:
+    def test_route_matrix(self):
+        from ai.agents.supervisor_graph import route_from_supervisor
+
+        assert route_from_supervisor({"has_emotion": True, "memory_kind": "recall"}) == ["emotion", "memory"]
+        assert route_from_supervisor({"has_emotion": True, "memory_kind": "none"}) == ["emotion"]
+        assert route_from_supervisor({"has_emotion": False, "memory_kind": "fact"}) == ["memory"]
+        assert route_from_supervisor({"has_emotion": False, "memory_kind": "none"}) == ["conversation"]
+        # 缺字段时不能崩
+        assert route_from_supervisor({}) == ["conversation"]
+
+
 class TestSupervisorGraph:
-    @pytest.mark.django_db
-    @pytest.mark.llm_integration
-    def test_create_supervisor_app(self, api_key, api_base):
-        from ai.agents.supervisor_graph import create_supervisor_app
+    def _app_with_spies(self, monkeypatch, decision):
+        from ai.agents import supervisor_graph as module
+        from langchain_core.messages import AIMessage
+
+        calls = []
+        monkeypatch.setattr(module, "supervisor_node", lambda state: decision)
+        monkeypatch.setattr(module, "emotion_agent_node", lambda state: (
+            calls.append("emotion") or {"emotion_analysis": {"intensity": 8}}
+        ))
+        monkeypatch.setattr(module, "memory_agent_node", lambda state: (
+            calls.append("memory") or {"memory_context": "上次很难过", "semantic_facts": []}
+        ))
+        monkeypatch.setattr(module, "conversation_agent_node", lambda state: (
+            calls.append("conversation") or {"messages": [AIMessage(content="我记得")]}
+        ))
+        return module.create_supervisor_app(), calls
+
+    def _invoke(self, app):
         from langchain_core.messages import HumanMessage
-        app = create_supervisor_app(
-            friend_id=1, character_id=1,
-            character_name="测试角色", character_profile="温柔体贴的女友",
-        )
-        result = app.invoke({
-            "messages": [HumanMessage(content="你好")],
-            "intent": "", "delegate_to": "", "memory_context": "",
-            "emotion_analysis": None, "character_profile": "温柔体贴的女友",
-            "character_name": "测试角色", "chat_sender_name": "测试角色",
-            "semantic_facts": [], "friend_id": 1, "character_id": 1,
+
+        return app.invoke({
+            "messages": [HumanMessage(content="你记得上次我很难过吗")],
+            "has_emotion": False,
+            "memory_kind": "none",
+            "memory_context": "",
+            "emotion_analysis": None,
+            "character_profile": "温柔",
+            "style_profile": "",
+            "base_system_prompt": "",
+            "time_context": "",
+            "character_name": "女友",
+            "chat_sender_name": "女友",
+            "semantic_facts": [],
+            "friend_id": 0,
+            "character_id": None,
         })
-        assert len(result["messages"]) > 1
+
+    def test_both_labels_run_emotion_and_memory_then_conversation(self, monkeypatch):
+        """核心验收：情绪与记忆同时命中时，两个节点都执行且各执行一次。"""
+        app, calls = self._app_with_spies(
+            monkeypatch,
+            {"has_emotion": True, "memory_kind": "recall", "classification_source": "llm"},
+        )
+        result = self._invoke(app)
+
+        assert sorted(calls) == ["conversation", "emotion", "memory"]
+        assert calls[-1] == "conversation"
+        assert result["messages"][-1].content == "我记得"
+
+    def test_emotion_only(self, monkeypatch):
+        app, calls = self._app_with_spies(
+            monkeypatch,
+            {"has_emotion": True, "memory_kind": "none", "classification_source": "llm"},
+        )
+        self._invoke(app)
+
+        assert sorted(calls) == ["conversation", "emotion"]
+
+    def test_memory_only(self, monkeypatch):
+        app, calls = self._app_with_spies(
+            monkeypatch,
+            {"has_emotion": False, "memory_kind": "fact", "classification_source": "llm"},
+        )
+        self._invoke(app)
+
+        assert sorted(calls) == ["conversation", "memory"]
+
+    def test_chat_only(self, monkeypatch):
+        app, calls = self._app_with_spies(
+            monkeypatch,
+            {"has_emotion": False, "memory_kind": "none", "classification_source": "fast_path"},
+        )
+        self._invoke(app)
+
+        assert sorted(calls) == ["conversation"]
+
+    def test_graph_topology_is_frozen(self):
+        """边集是冻结的：spec §3.3 要求逻辑边数从 9 条降到 7 条。
+
+        刻意写成精确集合——新增一条边（比如后续工具调用加的 tools 节点）
+        必须是有意识的决定，而不是顺手漂进来的。
+        """
+        from ai.agents.supervisor_graph import create_supervisor_app
+
+        drawable = create_supervisor_app().get_graph()
+        node_names = {"supervisor", "emotion", "memory", "conversation"}
+        edges = [(e.source, e.target) for e in drawable.edges if e.source in node_names and e.target in node_names]
+
+        assert sorted(edges) == [
+            ("emotion", "conversation"),
+            ("memory", "conversation"),
+            ("supervisor", "conversation"),
+            ("supervisor", "emotion"),
+            ("supervisor", "memory"),
+        ]
+
+    def test_graph_has_no_cycles(self):
+        """图必须无环——防环标志已随本次改造删除。
+
+        单独一个测试，因为上面那条断言的是「边集没变」，不是「图无环」：
+        冻结集合只统计四个节点之间的边，所以一条绕道新节点的环（后续加
+        tools 节点时的 supervisor → tools → supervisor）能完全瞒过它。
+        """
+        from langgraph.graph import START
+
+        from ai.agents.supervisor_graph import create_supervisor_app
+
+        drawable = create_supervisor_app().get_graph()
+        adjacency: dict[str, set[str]] = {}
+        for edge in drawable.edges:
+            # 刻意不按节点名过滤：两端不全在已知节点名里的边，正是要防的
+            # 那类环；一过滤就把它滤掉了（本测试的第一版就是这么漏的）。
+            adjacency.setdefault(edge.source, set()).add(edge.target)
+
+        def reachable(start: str) -> set[str]:
+            seen: set[str] = set()
+            stack = [start]
+            while stack:
+                for nxt in adjacency.get(stack.pop(), ()):
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        stack.append(nxt)
+            return seen
+
+        # 从 START 可达的每个节点都不能绕回自己。绕回 supervisor（也就绕回
+        # 自己）与 emotion ↔ memory 互达都包含在内。
+        for node in reachable(START) | {START}:
+            assert node not in reachable(node), f"{node} 处在环上"
+
+
+class TestSupervisorGraphParallelDatabaseAccess:
+    """spec §6 的风险项：emotion 与 memory 首次在同一超步内执行。
+
+    emotion 只调 LLM 不写库，memory 读库。LangGraph 把并行分支放在线程池里跑，
+    而 Django 的数据库连接是线程绑定的——这个测试确认两个分支都能正常读写。
+    """
+
+    @pytest.mark.django_db(transaction=True)
+    def test_real_memory_agent_reads_database_alongside_emotion(self, monkeypatch):
+        from django.contrib.auth.models import User
+        from langchain_core.messages import AIMessage, HumanMessage
+        from ai.agents import memory_agent as mem
+        from ai.agents import supervisor_graph as module
+        from storage.models.character import Character
+        from storage.models.friend import Friend
+        from storage.models.user import UserProfile
+
+        profile = UserProfile.objects.create(user=User.objects.create_user(username="parallel-db"))
+        character = Character.objects.create(author=profile, name="女友", profile="温柔")
+        friend = Friend.objects.create(me=profile, character=character)
+
+        semantic_calls = []
+        monkeypatch.setattr(mem, "search_semantic", lambda *a, **kw: (
+            semantic_calls.append(kw) or []
+        ))
+        monkeypatch.setattr(mem.Reranker, "rerank", lambda self, query, docs, top_k: docs)
+        monkeypatch.setattr(
+            mem.ConversationHistorySearch, "search",
+            lambda self, queries, **kwargs: [],
+        )
+        monkeypatch.setattr(
+            mem.QueryRewriter, "plan",
+            lambda self, *a, **kw: {"queries": ["还记得上次吗"], "temporal_anchor": "unknown"},
+        )
+        monkeypatch.setattr(module, "supervisor_node", lambda state: {
+            "has_emotion": True, "memory_kind": "recall", "classification_source": "llm",
+        })
+        monkeypatch.setattr(module, "emotion_agent_node", lambda state: {
+            "emotion_analysis": {"emotion": "sad", "intensity": 7},
+        })
+        monkeypatch.setattr(module, "conversation_agent_node", lambda state: (
+            {"messages": [AIMessage(content="我记得")]}
+        ))
+
+        result = module.create_supervisor_app().invoke({
+            "messages": [HumanMessage(content="你记得上次我很难过吗")],
+            "has_emotion": False,
+            "memory_kind": "none",
+            "memory_context": "",
+            "emotion_analysis": None,
+            "character_profile": "温柔",
+            "style_profile": "",
+            "base_system_prompt": "",
+            "time_context": "",
+            "character_name": "女友",
+            "chat_sender_name": "女友",
+            "semantic_facts": [],
+            "friend_id": friend.id,
+            "character_id": character.id,
+        })
+
+        # search_semantic 在 Friend 查询之后无条件调用，include_imported 由
+        # `bool(friend and can_access_imported_context(friend))` 决定。
+        # 工作线程读不到那一行时 friend 是 None、这里是 False——所以断言 True
+        # 才真正证明了跨线程读到了数据。只断言 retrieval_plan 不够：
+        # .first() 查不到时返回 None 而不是抛异常，plan() 照跑。
+        assert semantic_calls, "memory 节点没跑"
+        assert all(call["include_imported"] is True for call in semantic_calls)
+        assert result["emotion_analysis"]["intensity"] == 7
+        assert result["messages"][-1].content == "我记得"
