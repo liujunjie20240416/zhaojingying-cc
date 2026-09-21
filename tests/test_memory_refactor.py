@@ -623,18 +623,141 @@ def test_busy_day_uses_conditional_llm_reduce(monkeypatch):
     assert len(days) == 1
 
 
-def test_emoji_context_uses_llm_supervisor(monkeypatch):
-    from langchain_core.messages import HumanMessage
-    from ai.agents import supervisor as module
+@pytest.mark.django_db
+def test_memory_kind_drives_retrieval_strategy(monkeypatch):
+    """memory_kind 的三个取值分别决定检索策略。
 
-    monkeypatch.setattr(module, "_classify_with_llm", lambda *args: {
-        "intent": "emotional", "delegate_to": "emotion", "classification_source": "llm",
-    })
-    result = module.supervisor_node({
-        "messages": [HumanMessage(content="🙂‍↕️")],
-        "emotion_context": [{"emoji": "🙂‍↕️", "meaning": "不满、别扭"}],
-    })
-    assert result["delegate_to"] == "emotion"
+    - none：不调 QueryRewriter，也不翻原文——这一支只能证伪「过度触发」，
+      钉不住 memory_agent 里的任何一行
+    - recall：钉 `memory_kind == "recall"`——强制调 QueryRewriter 与翻原文，
+      且用的是规划后的 query
+    - fact：钉另外两处——`or memory_kind == "fact"`（调 QueryRewriter）与
+      `memory_kind == "fact" and not semantic_reliable`（不可靠才回退翻原文）
+
+    fact 的两条断言分别跑语义记忆不可靠（空结果）与可靠（一条 current 事实）
+    两种情况，这正是 `and not semantic_reliable` 这个守卫存在的理由：去掉守卫，
+    「语义记忆可靠时 fact 不该回退翻原文」立刻变红；否则 fact 与 recall 的观察
+    结果完全相同，一个布尔 has_memory 也能全绿。
+
+    只改 memory_kind 一个变量，消息文本和其余 state 都相同——这样才能证明
+    检索策略真的是由 memory_kind 决定的。
+    """
+    from django.contrib.auth.models import User
+    from langchain_core.messages import HumanMessage
+    from ai.agents import memory_agent as module
+    from storage.models.character import Character
+    from storage.models.friend import Friend, Message
+    from storage.models.user import UserProfile
+
+    profile = UserProfile.objects.create(user=User.objects.create_user(username="memory-kind"))
+    character = Character.objects.create(author=profile, name="女友", profile="温柔")
+    friend = Friend.objects.create(me=profile, character=character)
+    # 第 2 轮混合检索有前置条件（`if should_search_raw and (has_imported or
+    # has_online)`）：既没有导入聊天也没有在线消息时，should_search_raw 为真
+    # 也不会查库。放一条在线消息，让 recall 与 none 的差异真正落在检索上。
+    Message.objects.create(friend=friend, user_message="普通在线消息", input="", output="好")
+
+    planned = []
+    searched = []
+    monkeypatch.setattr(module, "search_semantic", lambda *a, **kw: [])
+    monkeypatch.setattr(module.Reranker, "rerank", lambda self, query, docs, top_k: docs)
+    monkeypatch.setattr(
+        module.ConversationHistorySearch, "search",
+        lambda self, queries, **kw: searched.append(queries) or [],
+    )
+    # 计划里的 query 必须与默认路径（queries = [user_msg]）不同，否则「规划器
+    # 到底跑没跑」在查库结果里看不出来——stub 返回同样的字符串就等于没测。
+    monkeypatch.setattr(
+        module.QueryRewriter, "plan",
+        lambda self, *a, **kw: planned.append(True) or {
+            "queries": ["今天天气不错", "换个说法再问一次"],
+            "temporal_anchor": "unknown",
+        },
+    )
+
+    base = {
+        "messages": [HumanMessage(content="今天天气不错")],
+        "friend_id": friend.id,
+        "character_id": character.id,
+        "semantic_facts": [],
+    }
+    planned_queries = [["今天天气不错", "换个说法再问一次"]]
+
+    module.memory_agent_node({**base, "memory_kind": "none"}, api_key="t", api_base="u")
+    assert planned == [], "闲聊不该调 QueryRewriter"
+    assert searched == [], "闲聊不该翻原文"
+
+    module.memory_agent_node({**base, "memory_kind": "recall"}, api_key="t", api_base="u")
+    assert len(planned) == 1, "recall 必须调 QueryRewriter"
+    assert searched == planned_queries, "recall 必须翻原文，且用的是规划后的 query"
+
+    planned.clear()
+    searched.clear()
+    module.memory_agent_node({**base, "memory_kind": "fact"}, api_key="t", api_base="u")
+    assert len(planned) == 1, "fact 必须调 QueryRewriter"
+    assert searched == planned_queries, "语义记忆不可靠时 fact 必须回退到翻原文"
+
+    # 换一条可靠的语义记忆，两个标签在这里必须分道扬镳：上面 search_semantic
+    # 一律返回空，只有这一组断言能钉住 `and not semantic_reliable`。
+    monkeypatch.setattr(module, "search_semantic", lambda *a, **kw: [
+        {"id": 1, "fact": "用户住在杭州", "memory_state": "current", "subject": "user"},
+    ])
+    planned.clear()
+    searched.clear()
+    module.memory_agent_node({**base, "memory_kind": "fact"}, api_key="t", api_base="u")
+    assert len(planned) == 1, "事实类仍要调 QueryRewriter"
+    assert searched == [], "语义记忆可靠时 fact 不该回退翻原文"
+
+    planned.clear()
+    searched.clear()
+    module.memory_agent_node({**base, "memory_kind": "recall"}, api_key="t", api_base="u")
+    assert searched == planned_queries, "recall 无视语义可靠性，强制翻原文"
+
+
+def test_tts_sender_persists_supervisor_decision():
+    """provenance 里的 supervisor_decision 由三个 state 字段拼装。
+
+    `supervisor_decision` 只是 provenance 的字段名，state 里没有这个键——
+    写成 result.get("supervisor_decision", {}) 会永远存下一个空字典
+    （spec 初版就是这么写的）。
+    """
+    import asyncio
+    from langchain_core.messages import AIMessage
+    from api.chat import tts_sender
+
+    queue: list[dict] = []
+
+    class FakeApp:
+        async def ainvoke(self, inputs, config=None):
+            return {
+                "messages": [AIMessage(content="嗨")],
+                "reply_provenance": {"has_working_summary": False, "retrieved_raw": []},
+                "has_emotion": True,
+                "memory_kind": "recall",
+                "classification_source": "llm",
+            }
+
+    class FakeMQ:
+        def put_nowait(self, item):
+            queue.append(item)
+
+    class FakeWS:
+        async def send(self, payload):
+            pass
+
+    # 不需要任何 SSE / TTS 机器：tts_sender 只用到 app.ainvoke、mq.put_nowait、
+    # ws.send 三件事，三个 duck type 的假件就够了。
+    asyncio.run(tts_sender(FakeApp(), {"reply_provenance": {}}, FakeMQ(), FakeWS(), "task-1"))
+
+    provenance = next(item["reply_provenance"] for item in queue if "reply_provenance" in item)
+    assert provenance["supervisor_decision"] == {
+        "has_emotion": True,
+        "memory_kind": "recall",
+        "classification_source": "llm",
+    }
+    assert "supervisor_intent" not in provenance
+    # 图里带出来的其它 provenance 字段照旧保留。
+    assert provenance["has_working_summary"] is False
 
 
 def test_emoji_meaning_does_not_modify_user_message():
@@ -726,7 +849,7 @@ def test_private_friend_history_search_receives_no_character_id(monkeypatch):
     monkeypatch.setattr(module.ConversationHistorySearch, "search", fake_search)
     module.memory_agent_node({
         "messages": [HumanMessage(content="还记得以前的秘密吗")],
-        "intent": "recall",
+        "memory_kind": "recall",
         "friend_id": friend.id,
         "character_id": character.id,
         "semantic_facts": [],

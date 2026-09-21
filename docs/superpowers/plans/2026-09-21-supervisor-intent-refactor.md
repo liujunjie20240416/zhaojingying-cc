@@ -1026,10 +1026,18 @@ EOF
 
 **Files:**
 - Modify: `ai/agents/memory_agent.py:235,246,292`
-- Modify: `api/chat.py:51-54,395-406`
+- Modify: `api/chat.py:51-57,388-401`
+
+  > 行号在实现阶段修正过一次：Task 2 删掉了 `api/chat.py` 里 5 行，此处原本写的 395-406 是**改动前**的位置，
+  > 现在漂到了 388-401。下面是按内容定位的结果，不是按行号。
 - Test: `tests/test_memory_refactor.py`
 
 - [ ] **Step 1: 写失败测试**
+
+> **本节有两步已在 Task 2 提前做完，实现时直接跳过**：`test_supervisor_skips_memory_for_chat_and_time`
+> 的替换（Task 2 已改成下面的 `test_supervisor_labels_independent_of_keywords`），以及
+> `test_emotion_and_memory_each_run_at_most_once` 的删除。本段文字保留原样是为了记录计划当时的形状，
+> 不是待办。
 
 在 `tests/test_memory_refactor.py` 里，把 `test_supervisor_skips_memory_for_chat_and_time`（第 362–368 行）替换为：
 
@@ -1052,22 +1060,20 @@ def test_supervisor_labels_independent_of_keywords(monkeypatch):
     assert recall["memory_kind"] == "recall"
 ```
 
-把 `test_emoji_context_uses_llm_supervisor`（第 616–627 行）替换为：
+把 `test_emoji_context_uses_llm_supervisor`（第 626–638 行）**删掉**。
 
-```python
-def test_emoji_context_uses_llm_supervisor(monkeypatch):
-    from ai.agents import supervisor as module
+原计划写的是「替换成下面这段」，实现阶段改成了删除。理由有两条，都是事后才看清的：
 
-    monkeypatch.setattr(module, "_classify_with_llm", lambda *a, **kw: {
-        "has_emotion": True, "memory_kind": "none", "classification_source": "llm",
-    })
-    result = module.supervisor_node({
-        "messages": [HumanMessage(content="🙂‍↕️")],
-        "emotion_context": [{"emoji": "🙂‍↕️", "meaning": "不满、别扭"}],
-    })
-    assert result["has_emotion"] is True
-    assert result["classification_source"] == "llm"
-```
+1. 它其实是绿的——旧版本断言 `result["delegate_to"]`，读的是 stub 自己塞进去的值；Task 1 之后没有任何
+   代码会产生这个键，所以新旧代码上都会「通过」。它不是一个待修的失败测试。
+2. 就算换成新断言也没用：这个用例的 `emotion_context` 是**惰性的**。把整个 `emotion_context` 删掉它照样
+   通过，因为裸 emoji 的 Unicode 类别是 `So`，本来就过不了快速通道——它名字里承诺的「emoji 语境豁免」
+   根本没被测到。
+
+真正测到那条豁免的是 `tests/test_agents.py:32 test_emoji_context_forces_classifier`：它用 `"好"`（一个
+**本来会**走快速通道的确认语）加一个 spy，证明 `_classify_with_llm` 确实被调用了。在这里改成用 `"好"`，
+等于把那条测试在第二个文件里抄一遍。所以是删除，不是重写。
+
 
 `test_emotion_and_memory_each_run_at_most_once` **已在 Task 2 删除**（它引用的 `route_after_emotion` /
 `route_after_memory` 是 Task 2 删掉的符号，留着就是 ImportError）。这里只需**新增**下面这个测试：
@@ -1126,7 +1132,10 @@ def test_memory_kind_drives_retrieval_strategy(monkeypatch):
 留一个红测试在那里没有意义）。所以 Task 3 开始时 `tests/test_memory_refactor.py` 应该是**全绿**的。
 如果你看到红的，先查清楚再动手——不要以为「那是在预期内的」。
 
-最后把第 776 行的 `"intent": "recall"` 改成 `"memory_kind": "recall"`。
+最后把 `test_private_friend_history_search_receives_no_character_id` 里的 `"intent": "recall"` 改成
+`"memory_kind": "recall"`（原计划写「第 776 行」，实际在第 778 行）。这一处**不会**由红转绿：那条测试问的是
+「还记得以前的秘密吗」，`detect_memory_intent` 对它本来就返回 `needs_raw_chat=True`，`should_search_raw`
+一直是真。改它只是因为 `intent` 这个键已经不存在了，属于词汇表迁移，不是覆盖率。
 
 （改动后的测试函数自带 `from langchain_core.messages import AIMessage, HumanMessage` 局部导入，与文件既有惯例一致，不需要动文件顶部。）
 
@@ -1136,7 +1145,14 @@ def test_memory_kind_drives_retrieval_strategy(monkeypatch):
 .venv/bin/pytest tests/test_memory_refactor.py -k "supervisor or memory_kind" -q
 ```
 
-Expected：FAIL —— `test_memory_kind_drives_retrieval_strategy` 的第二个断言失败（memory_agent 还在读 `intent`，`memory_kind="recall"` 被忽略，原文搜索不触发）。`test_supervisor_labels_independent_of_keywords` 也会因缺 `has_emotion` 失败。
+Expected：`1 failed, 2 passed`。**只有** `test_memory_kind_drives_retrieval_strategy` 会红，失败点是
+`assert len(searched) == 1, "recall 必须翻原文"` —— memory_agent 还在读 `intent`，`memory_kind="recall"`
+被忽略，原文搜索不触发。
+
+原计划在这里写了「`test_supervisor_labels_independent_of_keywords` 也会因缺 `has_emotion` 失败」，
+**那是错的**：那条 Task 2 就已重写，`supervisor_node` 在 Task 1 之后本来就返回 `has_emotion`。
+同理 `test_emoji_context_uses_llm_supervisor` 的替换也不是红转绿。把它们当成待转红的测试会导致
+「预期 3 红实际 1 红」时误判成实现出了问题。
 
 - [ ] **Step 3: 改 `ai/agents/memory_agent.py` 的三行**
 

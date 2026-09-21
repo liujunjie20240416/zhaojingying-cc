@@ -48,10 +48,13 @@ async def tts_sender(app, inputs, mq, ws, task_id):
     final_message = result.get("messages", [])[-1]
     if result.get("context_diagnostics"):
         mq.put_nowait({"context_diagnostics": result["context_diagnostics"]})
-    # Persist the classified intent so the next short follow-up can inherit it
-    # without paying another LLM classification.
     provenance = dict(result.get("reply_provenance", inputs.get("reply_provenance", {})))
-    provenance["supervisor_intent"] = result.get("intent", "chat")
+    # supervisor_decision 是从三个 state 字段拼出来的 provenance 字段，不是 state 键。
+    provenance["supervisor_decision"] = {
+        "has_emotion": result.get("has_emotion", False),
+        "memory_kind": result.get("memory_kind", "none"),
+        "classification_source": result.get("classification_source", ""),
+    }
     mq.put_nowait({"reply_provenance": provenance})
     bubbles = list((getattr(final_message, "additional_kwargs", {}) or {}).get("bubbles") or [])
     if not bubbles and getattr(final_message, "content", ""):
@@ -385,20 +388,14 @@ def chat(data: ChatRequest, user=Depends(get_current_user)):
     conversation_summary, message_raw = prepare_conversation_context(friend)
     messages = _build_conversation_messages(message, emotion_context, message_raw)
 
-    # Intent inheritance: the previous turn's classified intent decides short
-    # follow-ups ("还有呢", "哈哈") without an LLM classification call.
-    last_row = message_raw[-1] if message_raw else None
-    previous_intent = (
-        (last_row.reply_provenance or {}).get("supervisor_intent", "chat")
-        if last_row
-        else "chat"
-    )
+    # 意图继承已移除：每一轮都由 supervisor 重新分类。「哈哈」这类无信息量的
+    # 短消息仍由快速通道兜底，但「还有呢」这类省略指代的短消息现在每轮都过分类器，
+    # 靠分类器提示词里的最近对话理解指代——多一次调用的代价见 spec §6。
 
     inputs = {
         "messages": messages,
-        "intent": "",
-        "delegate_to": "",
-        "previous_intent": previous_intent,
+        "has_emotion": False,
+        "memory_kind": "none",
         "memory_context": "",
         "emotion_analysis": None,
         "emotion_context": emotion_context,

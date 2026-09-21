@@ -228,11 +228,14 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
     reranker = Reranker(api_key, api_base)
     character_id = state.get("character_id")
     friend_id = state.get("friend_id", 0)
+    # 缺字段一律当 "none"：supervisor_graph 的路由函数也是这个默认值，
+    # 两边对「state 里没写」必须给出同一个答案。
+    memory_kind = state.get("memory_kind", "none")
     friend = Friend.objects.select_related("character").filter(id=friend_id).first()
     imported_context_allowed = bool(friend and can_access_imported_context(friend))
     memory_intent = detect_memory_intent(user_msg)
     should_search_raw = (
-        state.get("intent") == "recall"
+        memory_kind == "recall"
         or memory_intent.get("needs_raw_chat", False)
         or memory_intent.get("needs_lightweight_recall", False)
     )
@@ -243,7 +246,9 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
         "source_policy": "any",
         "evidence_policy": "mixed",
     }
-    if should_search_raw or state.get("intent") == "memory":
+    # 为什么不止判 should_search_raw：下面算 semantic_reliable 用的是规划后的
+    # query 查回来的结果，fact 必须先过规划器，那条回退判断才有依据。
+    if should_search_raw or memory_kind == "fact":
         try:
             retrieval_plan = QueryRewriter(api_key, api_base).plan(
                 user_msg,
@@ -289,7 +294,7 @@ def memory_agent_node(state: dict, api_key: str = "", api_base: str = "") -> dic
         and (category_hint == "any" or item.get("category") == category_hint)
         for item in semantic_results[:5]
     )
-    if state.get("intent") == "memory" and not semantic_reliable:
+    if memory_kind == "fact" and not semantic_reliable:
         should_search_raw = True
     semantic_facts = [r["fact"] for r in semantic_results]
     user_facts = [r["fact"] for r in semantic_results if r.get("subject", "user") == "user"]
